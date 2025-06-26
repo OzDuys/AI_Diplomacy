@@ -217,20 +217,30 @@ class DiplomacyMultiTurnEnv:
                 # Generate military orders prompt
                 possible_orders = self._get_possible_orders_for_power(power)
                 prompt = construct_order_generation_prompt(
-                    agent=agent,
+                    system_prompt=agent.client.system_prompt,
                     game=self.game,
+                    board_state=self.game.get_state(),
+                    power_name=power,
+                    possible_orders={power: possible_orders},  # Format as expected
                     game_history=self.game_history,
-                    possible_orders=possible_orders,
-                    current_phase=self.current_phase
+                    agent_goals=agent.goals,
+                    agent_relationships=agent.relationships,
+                    agent_private_diary_str="\n".join(agent.private_diary),
+                    prompts_dir=self.prompts_dir
                 )
             else:  # NEGOTIATION
                 # Generate negotiation response prompt
                 conversation_context = self._get_negotiation_context(power)
                 prompt = build_context_prompt(
-                    agent=agent,
                     game=self.game,
-                    conversation_context=conversation_context,
-                    phase=self.current_phase
+                    board_state=self.game.get_state(),
+                    power_name=power,
+                    possible_orders={power: []},  # No orders needed for negotiation
+                    game_history=self.game_history,
+                    agent_goals=agent.goals,
+                    agent_relationships=agent.relationships,
+                    agent_private_diary="\n".join(agent.private_diary),
+                    prompts_dir=self.prompts_dir
                 )
             
             prompts.append(prompt)
