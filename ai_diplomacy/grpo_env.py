@@ -139,33 +139,61 @@ class DiplomacyMultiTurnEnv:
             logger.info(f"Game completed with victory: {self.game.get_current_phase()}")
             return True
             
-        # Check max year
-        current_year = int(self.current_phase[1:5])
-        if current_year > self.max_year:
-            logger.info(f"Game completed at max year {self.max_year}")
-            return True
+        # Check max year - safely parse phase
+        try:
+            if len(self.current_phase) >= 5 and self.current_phase[1:5].isdigit():
+                current_year = int(self.current_phase[1:5])
+                if current_year > self.max_year:
+                    logger.info(f"Game completed at max year {self.max_year}")
+                    return True
+            else:
+                logger.warning(f"Invalid phase format for year parsing: {self.current_phase}")
+        except (ValueError, IndexError) as e:
+            logger.error(f"Error parsing year from phase {self.current_phase}: {e}")
             
         return False
     
     def get_current_state(self) -> GameState:
         """Get current game state for prompt construction"""
+        # Safely get board state
+        board_state = self.game.get_state()
+        
+        # Validate board state has required keys
+        required_keys = ['units', 'centers', 'phase']
+        for key in required_keys:
+            if key not in board_state:
+                logger.error(f"Missing required key in board_state: {key}")
+                board_state[key] = {}  # Provide default empty dict
+        
+        # Safely get supply centers and units
+        supply_centers = {}
+        units = {}
+        
+        for power in ALL_POWERS:
+            try:
+                if power in self.game.powers:
+                    power_obj = self.game.get_power(power)
+                    supply_centers[power] = list(power_obj.centers) if power_obj.centers else []
+                    units[power] = [str(unit) for unit in power_obj.units] if power_obj.units else []
+                else:
+                    logger.warning(f"Power {power} not found in game")
+                    supply_centers[power] = []
+                    units[power] = []
+            except Exception as e:
+                logger.error(f"Error getting state for power {power}: {e}")
+                supply_centers[power] = []
+                units[power] = []
+        
         return GameState(
             phase=self.current_phase,
-            board_state=self.game.get_state(),
+            board_state=board_state,
             agent_relationships={
                 power: agent.relationships 
                 for power, agent in self.agents.items()
             },
-
             negotiations=self._get_negotiations_for_phase(self.current_phase),
-            supply_centers={
-                power: list(self.game.get_power(power).centers)
-                for power in ALL_POWERS
-            },
-            units={
-                power: [str(unit) for unit in self.game.get_power(power).units]
-                for power in ALL_POWERS
-            }
+            supply_centers=supply_centers,
+            units=units
         )
     
     def _get_negotiations_for_phase(self, phase: str) -> List[Dict[str, Any]]:
@@ -189,14 +217,28 @@ class DiplomacyMultiTurnEnv:
     def _get_possible_orders_for_power(self, power: str) -> List[str]:
         """Get all possible orders for a specific power"""
         all_orders = self.game.get_all_possible_orders()
+        
+        # Validate power exists
+        if power not in self.game.powers:
+            logger.error(f"Power {power} not found in game")
+            return []
+            
         power_obj = self.game.get_power(power)
         
         possible_orders = []
         for unit in power_obj.units:
-            # Extract location from unit (e.g., 'A VIE' -> 'VIE')
-            unit_location = str(unit).split()[1]
-            if unit_location in all_orders:
-                possible_orders.extend(all_orders[unit_location])
+            # Safely extract location from unit (e.g., 'A VIE' -> 'VIE')
+            unit_str = str(unit)
+            parts = unit_str.split()
+            
+            if len(parts) >= 2:
+                unit_location = parts[1]
+                if unit_location in all_orders:
+                    possible_orders.extend(all_orders[unit_location])
+                else:
+                    logger.debug(f"No orders found for unit location: {unit_location}")
+            else:
+                logger.error(f"Invalid unit format for {power}: '{unit_str}' - expected format like 'A VIE'")
         
         return possible_orders
     
@@ -216,6 +258,14 @@ class DiplomacyMultiTurnEnv:
             if self.current_decision_type == DecisionType.ORDER_GENERATION:
                 # Generate military orders prompt
                 possible_orders = self._get_possible_orders_for_power(power)
+                
+                # Debug: Log possible orders for troubleshooting
+                logger.debug(f"Possible orders for {power}: {len(possible_orders)} orders")
+                if possible_orders:
+                    logger.debug(f"Sample orders for {power}: {possible_orders[:3]}")
+                else:
+                    logger.warning(f"No possible orders found for {power}!")
+                
                 prompt = construct_order_generation_prompt(
                     system_prompt=agent.client.system_prompt,
                     game=self.game,
@@ -244,6 +294,10 @@ class DiplomacyMultiTurnEnv:
                 )
             
             prompts.append(prompt)
+            
+        # Debug: Log the first prompt to see what's being sent to the LLM
+        if prompts:
+            logger.debug(f"Sample prompt for {sorted(ALL_POWERS)[0]}: {prompts[0][:300]}...")
             
         return prompts
     
@@ -294,10 +348,21 @@ class DiplomacyMultiTurnEnv:
     
     def _process_orders(self, order_responses: List[str], step_info: Dict) -> List[float]:
         """Process military orders from all agents"""
+        # Validate input
+        if len(order_responses) != 7:
+            logger.error(f"Expected 7 order responses, got {len(order_responses)}")
+            return [0.0] * 7
+        
         # Parse orders from responses
         power_orders = {}
         for i, power in enumerate(sorted(ALL_POWERS)):
             try:
+                # Validate power exists
+                if power not in self.game.powers:
+                    logger.error(f"Power {power} not found in game")
+                    power_orders[power] = []
+                    continue
+                    
                 # Extract orders from LLM response
                 orders = self._parse_orders_from_response(order_responses[i])
                 power_orders[power] = orders
@@ -317,7 +382,13 @@ class DiplomacyMultiTurnEnv:
                 logger.warning(f"No orders parsed for {power}")
         
         # Process game phase
-        self.game.process()
+        try:
+            self.game.process()
+            logger.info(f"Game phase {self.current_phase} processed successfully")
+        except Exception as e:
+            logger.error(f"Failed to process game phase {self.current_phase}: {e}")
+            # Continue with rewards calculation even if processing failed
+            return [0.0] * 7
         
         # Calculate step rewards
         rewards = calculate_step_rewards(
@@ -379,22 +450,66 @@ class DiplomacyMultiTurnEnv:
         return rewards
     
     def _parse_orders_from_response(self, response: str) -> List[str]:
-        """Extract valid orders from LLM response"""
+        """Extract valid orders from LLM response (handles both JSON and plain text)"""
         orders = []
         
         # Log the raw response for debugging
         logger.debug(f"Raw LLM response: {response[:200]}...")
         
-        for line in response.split('\n'):
-            line = line.strip()
-            # Look for lines that start with unit notation (A or F followed by space)
-            if line and (line.startswith('A ') or line.startswith('F ')):
-                # Clean up the order - remove extra whitespace
-                cleaned_order = ' '.join(line.split())
-                orders.append(cleaned_order)
+        # First, try to parse as JSON (most common format from LLMs)
+        try:
+            # Look for JSON in the response
+            import json
+            import re
+            
+            # Try multiple approaches to find JSON with orders
+            
+            # Approach 1: Find complete JSON objects with "orders" key
+            json_patterns = [
+                r'\{[^{}]*"orders"[^{}]*\}',  # Simple JSON
+                r'\{(?:[^{}]*\{[^{}]*\})*[^{}]*"orders"[^{}]*\}',  # Nested JSON
+                r'"orders"\s*:\s*\[[^\]]*\]',  # Just the orders array
+            ]
+            
+            for pattern in json_patterns:
+                json_matches = re.findall(pattern, response, re.DOTALL)
+                
+                for json_str in json_matches:
+                    try:
+                        # If it's just the orders array, wrap it in an object
+                        if json_str.startswith('"orders"'):
+                            json_str = '{' + json_str + '}'
+                            
+                        parsed = json.loads(json_str)
+                        if "orders" in parsed and isinstance(parsed["orders"], list):
+                            for order in parsed["orders"]:
+                                if isinstance(order, str) and order.strip():
+                                    # Clean up the order
+                                    cleaned_order = ' '.join(order.strip().split())
+                                    if cleaned_order.startswith('A ') or cleaned_order.startswith('F '):
+                                        orders.append(cleaned_order)
+                            if orders:  # If we found orders, stop looking
+                                break
+                    except json.JSONDecodeError as e:
+                        logger.debug(f"Failed to parse JSON '{json_str[:50]}...': {e}")
+                        continue
+                
+                if orders:  # If we found orders, stop trying patterns
+                    break
+        except Exception as e:
+            logger.debug(f"JSON parsing failed: {e}")
         
-        # If no orders found, this might be because the LLM response is invalid
-        # For testing purposes, let's provide some default hold orders
+        # If JSON parsing didn't work, try plain text parsing
+        if not orders:
+            for line in response.split('\n'):
+                line = line.strip()
+                # Look for lines that start with unit notation (A or F followed by space)
+                if line and (line.startswith('A ') or line.startswith('F ')):
+                    # Clean up the order - remove extra whitespace
+                    cleaned_order = ' '.join(line.split())
+                    orders.append(cleaned_order)
+        
+        # If still no orders found, log the issue
         if not orders:
             logger.warning(f"No valid orders found in response: {response[:100]}...")
         
