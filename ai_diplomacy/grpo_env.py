@@ -297,7 +297,14 @@ class DiplomacyMultiTurnEnv:
             
         # Debug: Log the first prompt to see what's being sent to the LLM
         if prompts:
-            logger.debug(f"Sample prompt for {sorted(ALL_POWERS)[0]}: {prompts[0][:300]}...")
+            first_power = sorted(ALL_POWERS)[0]
+            logger.debug(f"Sample prompt for {first_power}: {prompts[0][:500]}...")
+            
+            # Also log system prompts for all powers to debug Churchill issue
+            for power in sorted(ALL_POWERS):
+                agent = self.agents[power]
+                system_prompt = agent.client.system_prompt
+                logger.debug(f"{power} system prompt: {system_prompt[:200]}...")
             
         return prompts
     
@@ -365,6 +372,14 @@ class DiplomacyMultiTurnEnv:
                     
                 # Extract orders from LLM response
                 orders = self._parse_orders_from_response(order_responses[i])
+                
+                # If no orders found, provide default hold orders for testing
+                if not orders:
+                    hold_orders = self._get_default_hold_orders(power)
+                    if hold_orders:
+                        logger.info(f"Using default hold orders for {power}: {hold_orders}")
+                        orders = hold_orders
+                
                 power_orders[power] = orders
             except Exception as e:
                 logger.error(f"Failed to parse orders for {power}: {e}")
@@ -509,13 +524,51 @@ class DiplomacyMultiTurnEnv:
                     cleaned_order = ' '.join(line.split())
                     orders.append(cleaned_order)
         
-        # If still no orders found, log the issue
+        # If still no orders found, provide default hold orders for testing
         if not orders:
             logger.warning(f"No valid orders found in response: {response[:100]}...")
+            
+            # For testing purposes, let's provide basic hold orders
+            # This will help us test the rest of the system
+            # TODO: Remove this once prompt issues are fixed
+            power = "UNKNOWN"  # Will be filled in by caller context
+            try:
+                # Try to infer power from response context or use a default
+                power_mentions = [p for p in ALL_POWERS if p.lower() in response.lower()]
+                if power_mentions:
+                    power = power_mentions[0]
+            except:
+                pass
+                
+            logger.info(f"Providing default hold orders for testing purposes")
+            # We'll let the caller handle providing appropriate default orders
         
         # Log parsed orders for debugging
         logger.debug(f"Parsed orders from response: {orders}")
         return orders
+    
+    def _get_default_hold_orders(self, power: str) -> List[str]:
+        """Generate default hold orders for a power (for testing when LLM fails)"""
+        try:
+            if power not in self.game.powers:
+                return []
+                
+            power_obj = self.game.get_power(power)
+            hold_orders = []
+            
+            for unit in power_obj.units:
+                unit_str = str(unit)
+                parts = unit_str.split()
+                if len(parts) >= 2:
+                    unit_type = parts[0]  # 'A' or 'F'
+                    location = parts[1]   # 'VIE', 'TRI', etc.
+                    hold_order = f"{unit_type} {location} H"
+                    hold_orders.append(hold_order)
+            
+            return hold_orders
+        except Exception as e:
+            logger.error(f"Failed to generate default hold orders for {power}: {e}")
+            return []
     
     def _advance_phase(self):
         """Advance to next phase or negotiation round"""
