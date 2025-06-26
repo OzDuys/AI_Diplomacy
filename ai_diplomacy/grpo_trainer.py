@@ -15,17 +15,21 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 import json
 
+# Core ML imports (required)
+from transformers import AutoTokenizer, AutoModelForCausalLM
+
 # Import willccbb/verifiers components (will be installed in Colab)
 try:
     from verifiers.trainer import GRPOTrainer
     from verifiers.envs import MultiTurnEnv
     from verifiers.data_types import Episode, Step
-    from transformers import AutoTokenizer, AutoModelForCausalLM
 except ImportError:
     # Graceful fallback for development/testing
     logging.warning("verifiers package not found. Install with: pip install git+https://github.com/willccbb/verifiers.git")
     GRPOTrainer = None
     MultiTurnEnv = None
+    Episode = None
+    Step = None
 
 from .grpo_env import DiplomacyMultiTurnEnv, DecisionType
 from .grpo_rewards import analyze_alliance_patterns
@@ -286,6 +290,10 @@ class DiplomacyGRPOTrainer:
             logger.warning("GRPO trainer not available - skipping model update")
             return
         
+        if Episode is None:
+            logger.warning("Episode class not available (verifiers not installed) - skipping model update")
+            return
+            
         episode_data = episode_result['episode_data']
         
         # Convert to verifiers format
