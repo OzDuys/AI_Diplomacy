@@ -114,7 +114,7 @@ class AllianceTracker:
         self.power_stats[power1].alliances_formed += 1
         self.power_stats[power2].alliances_formed += 1
         
-        logger.info(f"Alliance formed between {power1} and {power2} in {phase}")
+        logger.debug(f"Alliance formed between {power1} and {power2} in {phase}")
     
     def _update_alliance_strength(self, alliance_key: Tuple[str, str], rel1: str, rel2: str):
         """Update alliance strength based on mutual relationship levels"""
@@ -138,7 +138,7 @@ class AllianceTracker:
         self.power_stats[victim].betrayals_suffered += 1
         self.power_stats[betrayer].alliances_broken += 1
         
-        logger.info(f"Betrayal detected: {betrayer} betrayed {victim} in {phase}")
+        logger.debug(f"Betrayal detected: {betrayer} betrayed {victim} in {phase}")
     
     def get_alliance_rewards(self, phase: str) -> Dict[str, float]:
         """
@@ -198,6 +198,7 @@ def calculate_step_rewards(
         List of 7 rewards (one per power, in alphabetical order)
     """
     rewards = []
+    center_changes = {}
     
     # Update alliance tracker with current relationships
     alliance_tracker.update_relationships(agents, phase)
@@ -213,9 +214,20 @@ def calculate_step_rewards(
         if decision_type == "orders":
             # Territory/military rewards
             current_centers = len(game_power.centers)
+            
+            # Calculate change from start of game (first entry in stats)
             if stats.supply_centers:
-                center_change = current_centers - stats.supply_centers[-1]
-                reward += center_change * 2.0  # +2 per center gained, -2 per center lost
+                # Change from previous phase
+                phase_change = current_centers - stats.supply_centers[-1]
+                # Change from start of game
+                game_change = current_centers - stats.supply_centers[0]
+                reward += phase_change * 2.0  # +2 per center gained, -2 per center lost
+            else:
+                # First turn - initialize with starting centers
+                game_change = 0  # No change from start
+                phase_change = 0
+            
+            center_changes[power] = game_change
             
             # Update stats
             stats.supply_centers.append(current_centers)
@@ -229,8 +241,20 @@ def calculate_step_rewards(
         elif decision_type == "negotiation":
             # Diplomatic rewards (alliance formation, etc.)
             reward += alliance_rewards.get(power, 0.0)
+            # For negotiation, show previous center changes
+            if stats.supply_centers:
+                game_change = stats.supply_centers[-1] - stats.supply_centers[0] if len(stats.supply_centers) > 1 else 0
+                center_changes[power] = game_change
             
         rewards.append(reward)
+    
+    # Log center changes instead of alliance information
+    if decision_type == "orders" and center_changes:
+        center_summary = ", ".join([f"{power}: {change:+d}" for power, change in center_changes.items() if change != 0])
+        if center_summary:
+            logger.info(f"Center changes since game start ({phase}): {center_summary}")
+        else:
+            logger.info(f"No center changes this phase ({phase})")
     
     logger.debug(f"Step rewards for {phase} ({decision_type}): {dict(zip(sorted(ALL_POWERS), rewards))}")
     return rewards
@@ -294,7 +318,19 @@ def calculate_final_rewards(
         
         rewards.append(reward)
     
-    logger.info(f"Final rewards: {dict(zip(sorted(ALL_POWERS), rewards))}")
+    # Log final center changes instead of just rewards
+    center_changes = {}
+    for power in sorted(ALL_POWERS):
+        stats = alliance_tracker.power_stats[power]
+        if stats.supply_centers and len(stats.supply_centers) > 1:
+            game_change = stats.supply_centers[-1] - stats.supply_centers[0]
+            center_changes[power] = game_change
+        else:
+            center_changes[power] = 0
+    
+    center_summary = ", ".join([f"{power}: {change:+d}" for power, change in center_changes.items()])
+    logger.info(f"Final center changes: {center_summary}")
+    logger.debug(f"Final rewards: {dict(zip(sorted(ALL_POWERS), rewards))}")
     return rewards
 
 
