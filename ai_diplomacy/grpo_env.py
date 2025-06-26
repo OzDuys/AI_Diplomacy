@@ -81,15 +81,18 @@ class DiplomacyMultiTurnEnv:
         self.game_history = GameHistory()
         self.alliance_tracker = AllianceTracker()
         
-        # Agents (7 powers, all using same base model)
-        self.agents: Dict[str, DiplomacyAgent] = {}
-        self._initialize_agents()
-        
         # Training state
         self.current_decision_type = DecisionType.ORDER_GENERATION
         self.current_phase = "S1901M"
         self.episode_data = []  # Store all decisions for end-game GRPO update
         self.step_counter = 0
+        
+        # Add initial phase to game history
+        self.game_history.add_phase(self.current_phase)
+        
+        # Agents (7 powers, all using same base model)
+        self.agents: Dict[str, DiplomacyAgent] = {}
+        self._initialize_agents()
         
         logger.info(f"Initialized DiplomacyMultiTurnEnv with {len(self.agents)} agents")
     
@@ -153,7 +156,8 @@ class DiplomacyMultiTurnEnv:
                 power: agent.relationships 
                 for power, agent in self.agents.items()
             },
-            negotiations=self.game_history.get_negotiations_for_phase(self.current_phase),
+
+            negotiations=self._get_negotiations_for_phase(self.current_phase),
             supply_centers={
                 power: list(self.game.get_power(power).centers)
                 for power in ALL_POWERS
@@ -163,6 +167,24 @@ class DiplomacyMultiTurnEnv:
                 for power in ALL_POWERS
             }
         )
+    
+    def _get_negotiations_for_phase(self, phase: str) -> List[Dict[str, Any]]:
+        """Get negotiations/messages for a specific phase"""
+        negotiations = []
+        
+        # Find the phase in game history
+        for game_phase in self.game_history.phases:
+            if game_phase.name == phase:
+                # Convert messages to dictionaries
+                for message in game_phase.messages:
+                    negotiations.append({
+                        'sender': message.sender,
+                        'recipient': message.recipient,
+                        'content': message.content
+                    })
+                break
+        
+        return negotiations
     
     def get_batch_prompts(self) -> List[str]:
         """
@@ -204,7 +226,7 @@ class DiplomacyMultiTurnEnv:
     def _get_negotiation_context(self, power: str) -> str:
         """Get negotiation context for a specific power"""
         # Get recent messages involving this power
-        negotiations = self.game_history.get_negotiations_for_phase(self.current_phase)
+        negotiations = self._get_negotiations_for_phase(self.current_phase)
         relevant_messages = [
             msg for msg in negotiations 
             if msg.get('sender') == power or msg.get('recipient') == power
@@ -296,11 +318,11 @@ class DiplomacyMultiTurnEnv:
             message = negotiation_responses[i].strip()
             if message and message != "NONE":
                 # Add to game history
-                self.game_history.add_negotiation_message(
-                    phase=self.current_phase,
+                self.game_history.add_message(
+                    phase_name=self.current_phase,
                     sender=power,
                     recipient="ALL",  # Public diplomacy for now
-                    content=message
+                    message_content=message
                 )
         
         # Calculate negotiation rewards (alliance formation, etc.)
@@ -374,6 +396,9 @@ class DiplomacyMultiTurnEnv:
         self.current_decision_type = DecisionType.ORDER_GENERATION
         self.episode_data = []
         self.step_counter = 0
+        
+        # Add initial phase to game history
+        self.game_history.add_phase(self.current_phase)
         
         # Reinitialize agents
         self._initialize_agents()
