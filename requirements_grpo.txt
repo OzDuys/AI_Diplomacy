@@ -1,0 +1,39 @@
+# AI Diplomacy GRPO Training Requirements
+# Use this file for easier installation: pip install -r requirements_grpo.txt
+
+# Core ML packages
+torch>=2.0.0
+transformers>=4.35.0
+accelerate>=0.20.0
+datasets>=2.14.0
+numpy>=1.24.0
+scipy>=1.10.0
+
+# Monitoring and visualization
+tensorboard>=2.14.0
+wandb>=0.15.0
+matplotlib>=3.8.0
+seaborn>=0.13.0
+
+# AI Diplomacy specific dependencies
+coloredlogs>=15.0.1
+python-dotenv>=0.9.9
+ujson>=5.10.0
+tornado>=5.0
+tqdm>=4.67.1
+
+# LLM API clients
+anthropic>=0.54.0
+openai>=1.90.0
+google-generativeai>=0.8.5
+together>=1.5.17
+
+# Utilities
+json-repair>=0.47.2
+json5>=0.12.0
+bcrypt>=4.3.0
+pytest>=4.4.0
+pylint>=2.3.0
+
+# GRPO framework (install separately)
+# pip install git+https://github.com/willccbb/verifiers.git
