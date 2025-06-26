@@ -19,6 +19,7 @@ from .clients import load_model_client
 from .game_history import GameHistory
 from .prompt_constructor import construct_order_generation_prompt, build_context_prompt
 from .grpo_rewards import AllianceTracker, calculate_step_rewards, calculate_final_rewards
+from .initialization import initialize_agent_state_ext
 
 logger = logging.getLogger(__name__)
 
@@ -101,9 +102,27 @@ class DiplomacyMultiTurnEnv:
                 client=client,
                 prompts_dir=self.prompts_dir
             )
-            # Initialize agent state (goals, relationships)
-            agent.initialize_agent_state_ext(self.game, self.game_history)
+            # Simple initialization for GRPO training (no LLM calls)
+            self._initialize_agent_simple(agent, power)
             self.agents[power] = agent
+    
+    def _initialize_agent_simple(self, agent: DiplomacyAgent, power: str):
+        """Simple initialization without LLM calls for faster GRPO training"""
+        # Set basic initial goals based on power
+        initial_goals = {
+            "AUSTRIA": ["Secure the Balkans", "Form alliance with Germany", "Contain Russia"],
+            "ENGLAND": ["Control the seas", "Secure Scotland", "Build naval supremacy"],
+            "FRANCE": ["Secure Spain", "Form alliance with Russia", "Contain Germany"],
+            "GERMANY": ["Secure Scandinavia", "Form central alliance", "Control North Sea"],
+            "ITALY": ["Secure the Mediterranean", "Form Lepanto alliance", "Build fleet"],
+            "RUSSIA": ["Secure Scandinavia", "Form western alliance", "Control Black Sea"],
+            "TURKEY": ["Secure the Black Sea", "Form Juggernaut alliance", "Build to Mediterranean"]
+        }
+        
+        agent.goals = initial_goals.get(power, ["Survive", "Gain territory", "Form alliances"])
+        
+        # Initialize neutral relationships (will be updated during play)
+        agent.relationships = {p: "Neutral" for p in ALL_POWERS if p != power}
             
     def is_completed(self) -> bool:
         """
