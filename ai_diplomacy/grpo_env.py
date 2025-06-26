@@ -186,6 +186,20 @@ class DiplomacyMultiTurnEnv:
         
         return negotiations
     
+    def _get_possible_orders_for_power(self, power: str) -> List[str]:
+        """Get all possible orders for a specific power"""
+        all_orders = self.game.get_all_possible_orders()
+        power_obj = self.game.get_power(power)
+        
+        possible_orders = []
+        for unit in power_obj.units:
+            # Extract location from unit (e.g., 'A VIE' -> 'VIE')
+            unit_location = str(unit).split()[1]
+            if unit_location in all_orders:
+                possible_orders.extend(all_orders[unit_location])
+        
+        return possible_orders
+    
     def get_batch_prompts(self) -> List[str]:
         """
         Generate prompts for all 7 agents for current decision type.
@@ -201,7 +215,7 @@ class DiplomacyMultiTurnEnv:
             
             if self.current_decision_type == DecisionType.ORDER_GENERATION:
                 # Generate military orders prompt
-                possible_orders = self.game.get_all_possible_orders()[power]
+                possible_orders = self._get_possible_orders_for_power(power)
                 prompt = construct_order_generation_prompt(
                     agent=agent,
                     game=self.game,
