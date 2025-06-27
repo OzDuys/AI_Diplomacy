@@ -53,6 +53,7 @@ class TrainingConfig:
     # Model settings
     model_name: str = "Qwen/Qwen2.5-1.5B-Instruct"
     max_length: int = 2048
+    torch_dtype: str = "auto"  # "auto", "bfloat16", "float16", "float32"
     
     # Training settings
     batch_size: int = 7  # One batch = one full game (7 agents)
@@ -106,9 +107,12 @@ class DiplomacyGRPOTrainer:
         # Initialize model and tokenizer with optimized settings
         self.tokenizer = AutoTokenizer.from_pretrained(config.model_name)
         
+        # Optimize dtype selection for best performance and memory usage
+        torch_dtype = self._get_optimal_dtype(config.torch_dtype)
+        
         # Optimize model loading for large VRAM
         model_kwargs = {
-            "torch_dtype": torch.float16 if torch.cuda.is_available() else torch.float32,
+            "torch_dtype": torch_dtype,
         }
         
         if torch.cuda.is_available():
@@ -121,6 +125,7 @@ class DiplomacyGRPOTrainer:
             
             # Use default attention (Flash Attention 2 removed for compatibility)
         
+        logger.info(f"Loading model with dtype: {torch_dtype}")
         self.model = AutoModelForCausalLM.from_pretrained(config.model_name, **model_kwargs)
         
         # Enable gradient checkpointing for memory efficiency during training
@@ -226,6 +231,42 @@ class DiplomacyGRPOTrainer:
             logger.info("W&B logging disabled")
         
         logger.info(f"Initialized DiplomacyGRPOTrainer with model {config.model_name}")
+    
+    def _get_optimal_dtype(self, dtype_config: str):
+        """
+        Select optimal dtype based on hardware capabilities and configuration.
+        
+        Args:
+            dtype_config: "auto", "bfloat16", "float16", "float32"
+            
+        Returns:
+            torch dtype for model loading
+        """
+        if dtype_config == "float32":
+            return torch.float32
+        elif dtype_config == "float16":
+            return torch.float16
+        elif dtype_config == "bfloat16":
+            if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
+                return torch.bfloat16
+            else:
+                logger.warning("bfloat16 requested but not supported by hardware, falling back to float16")
+                return torch.float16 if torch.cuda.is_available() else torch.float32
+        elif dtype_config == "auto":
+            # Auto-select best dtype based on hardware
+            if torch.cuda.is_available():
+                # Check for bfloat16 support (Ampere+ GPUs: RTX 30/40 series, A100, H100, etc.)
+                if torch.cuda.is_bf16_supported():
+                    logger.info("Auto-selected bfloat16 for optimal training stability")
+                    return torch.bfloat16
+                else:
+                    logger.info("Auto-selected float16 for memory efficiency")
+                    return torch.float16
+            else:
+                logger.info("Auto-selected float32 for CPU")
+                return torch.float32
+        else:
+            raise ValueError(f"Invalid torch_dtype: {dtype_config}. Use 'auto', 'bfloat16', 'float16', or 'float32'")
     
     def _setup_logging(self):
         """Setup logging configuration"""
