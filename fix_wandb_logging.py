@@ -106,6 +106,31 @@ def add_graceful_fallback():
     else:
         print("Could not find _init_wandb method to replace")
 
+def fix_missing_imports():
+    """Fix missing imports in grpo_trainer.py"""
+    trainer_path = Path(__file__).parent / "ai_diplomacy" / "grpo_trainer.py"
+    
+    if not trainer_path.exists():
+        print(f"Warning: {trainer_path} not found")
+        return
+    
+    with open(trainer_path, 'r') as f:
+        content = f.read()
+    
+    # Check if time import is missing
+    if 'import time' not in content and 'start_time = time.time()' in content:
+        # Add time import after numpy
+        content = content.replace(
+            'import numpy as np\n',
+            'import numpy as np\nimport time\n'
+        )
+        
+        with open(trainer_path, 'w') as f:
+            f.write(content)
+        print("✓ Added missing 'time' import to grpo_trainer.py")
+    else:
+        print("✓ grpo_trainer.py imports look correct")
+
 def main():
     """Apply all fixes"""
     print("Applying W&B logging fixes...")
@@ -113,9 +138,12 @@ def main():
     try:
         fix_wandb_logger()
         add_graceful_fallback()
+        fix_missing_imports()
         print("\n✓ All fixes applied successfully!")
         print("\nYou can now run GRPO training with:")
         print("python -c \"from ai_diplomacy.grpo_trainer import TrainingConfig, DiplomacyGRPOTrainer; trainer = DiplomacyGRPOTrainer(TrainingConfig(use_wandb=True)); trainer.train()\"")
+        print("\nOr test the integration with:")
+        print("python test_grpo_wandb.py")
         
     except Exception as e:
         print(f"\n❌ Fix failed: {e}")
