@@ -297,8 +297,15 @@ class DiplomacyMultiTurnEnv:
             
         # Debug: Log prompt info (reduced verbosity)
         if prompts:
-            logger.debug(f"Generated {len(prompts)} prompts for current decision type")
-            # Removed verbose prompt and system prompt logging to reduce clutter
+            logger.info(f"Generated {len(prompts)} prompts for current decision type: {self.current_decision_type.value}")
+            # Log a sample of the first prompt to verify it's properly constructed
+            if prompts[0]:
+                first_prompt_preview = prompts[0][:500] + "..." if len(prompts[0]) > 500 else prompts[0]
+                logger.info(f"Sample prompt (first 500 chars): {first_prompt_preview}")
+            else:
+                logger.warning("First prompt is empty!")
+        else:
+            logger.warning("No prompts generated!")
             
         return prompts
     
@@ -475,6 +482,10 @@ class DiplomacyMultiTurnEnv:
         """Extract valid orders from LLM response (handles both JSON and plain text)"""
         orders = []
         
+        # Always log the full response for debugging purposes
+        logger.info(f"Full LLM response from {power}:")
+        self._log_full_response(power, response, "ALL LLM RESPONSES")
+        
         # Use the power-aware logging utility if power is provided
         # Log the raw response for debugging - full response will be logged if no orders are found
         logger.debug(f"Raw LLM response from {power} (first 200 chars): {response[:200]}...")
@@ -621,7 +632,7 @@ class DiplomacyMultiTurnEnv:
             context: Context information about what the response is for
         """
         # Log header with clear separation
-        logger.debug(f"===== FULL {context} FOR {power} =====")
+        logger.info(f"===== FULL {context} FOR {power} =====")
         
         # Break the response into chunks of 1000 characters for better logging
         chunk_size = 1000
@@ -629,16 +640,16 @@ class DiplomacyMultiTurnEnv:
         
         # Only warn about chunking for large responses
         if num_chunks > 1:
-            logger.debug(f"Response is {len(response)} characters, logging in {num_chunks} chunks")
+            logger.info(f"Response is {len(response)} characters, logging in {num_chunks} chunks")
         
         # Log each chunk with a clear prefix
         for i in range(0, len(response), chunk_size):
             chunk = response[i:i+chunk_size]
             chunk_num = i // chunk_size + 1
             if num_chunks > 1:
-                logger.debug(f"CHUNK {chunk_num}/{num_chunks}: {chunk}")
+                logger.info(f"CHUNK {chunk_num}/{num_chunks}: {chunk}")
             else:
-                logger.debug(f"{chunk}")
+                logger.info(f"{chunk}")
                 
         # Log footer
-        logger.debug(f"===== END {context} FOR {power} =====")
+        logger.info(f"===== END {context} FOR {power} =====")
