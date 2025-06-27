@@ -219,6 +219,12 @@ Games generate comprehensive analysis data:
 - **GRPO Training Logs**: Step-by-step rewards, center changes, alliance formation
 - **W&B Metrics**: Real-time training progress with numeric field optimization
 
+
+
+
+
+
+
 ## GRPO Training System
 
 ### Key Features

@@ -26,7 +26,7 @@ from .prompt_constructor import construct_order_generation_prompt, build_context
 
 # set logger back to just info
 logger = logging.getLogger("client")
-logger.setLevel(logging.DEBUG) # Keep debug for now during async changes
+#logger.setLevel(logging.DEBUG) # Keep debug for now during async changes
 # Note: BasicConfig might conflict if already configured in lm_game. Keep client-specific for now.
 # logging.basicConfig(level=logging.DEBUG) # Might be redundant if lm_game configures root
 
@@ -125,6 +125,29 @@ class BaseModelClient:
 
             # Attempt to parse the final "orders" from the LLM
             move_list = self._extract_moves(raw_response, power_name)
+            
+            # Debug logging for LLM generation when debug mode is enabled
+            from .prompt_constructor import log_llm_generation
+            parsing_error = None
+            if not move_list:
+                parsing_error = "Could not extract any moves from LLM response"
+            
+            # Log the complete LLM generation process for debugging
+            log_llm_generation(
+                power_name=power_name,
+                prompt=prompt,
+                raw_response=raw_response,
+                parsed_orders=move_list,
+                parsing_error=parsing_error,
+                phase=phase,
+                generation_metadata={
+                    "model": self.model_name,
+                    "temperature": 0,
+                    "response_type": "order_generation",
+                    "prompt_length": len(prompt),
+                    "response_length": len(raw_response)
+                }
+            )
 
             if not move_list:
                 logger.warning(
@@ -139,6 +162,29 @@ class BaseModelClient:
                 # Validate or fallback
                 validated_moves, invalid_moves_list = self._validate_orders(move_list, possible_orders)
                 logger.debug(f"[{self.model_name}] Validated moves for {power_name}: {validated_moves}")
+                
+                # Additional debug logging for validation issues
+                if invalid_moves_list:
+                    from .prompt_constructor import log_llm_generation
+                    validation_error = f"Validation failed for {len(invalid_moves_list)} orders: {invalid_moves_list}"
+                    log_llm_generation(
+                        power_name=power_name,
+                        prompt=prompt,
+                        raw_response=raw_response,
+                        parsed_orders=move_list,
+                        parsing_error=validation_error,
+                        phase=phase,
+                        generation_metadata={
+                            "model": self.model_name,
+                            "temperature": 0,
+                            "response_type": "order_validation",
+                            "validated_orders": validated_moves,
+                            "invalid_orders": invalid_moves_list,
+                            "validation_passed": len(validated_moves),
+                            "validation_failed": len(invalid_moves_list)
+                        }
+                    )
+                
                 parsed_orders_for_return = validated_moves
                 if invalid_moves_list:
                     # Truncate if too many invalid moves to keep log readable
@@ -165,6 +211,23 @@ class BaseModelClient:
         except Exception as e:
             logger.error(f"[{self.model_name}] LLM error for {power_name} in get_orders: {e}", exc_info=True)
             success_status = f"Failure: Exception ({type(e).__name__})"
+            
+            # Debug logging for exceptions
+            from .prompt_constructor import log_llm_generation
+            log_llm_generation(
+                power_name=power_name,
+                prompt=prompt,
+                raw_response=raw_response,
+                parsed_orders=None,
+                parsing_error=f"Exception during order generation: {type(e).__name__}: {str(e)}",
+                phase=phase,
+                generation_metadata={
+                    "model": self.model_name,
+                    "temperature": 0,
+                    "response_type": "order_generation_exception",
+                    "exception_type": type(e).__name__
+                }
+            )
             # Fallback is already set to parsed_orders_for_return
         finally:
             # Log the attempt regardless of outcome
