@@ -521,21 +521,6 @@ class DiplomacyMultiTurnEnv:
         # If still no orders found, provide default hold orders for testing
         if not orders:
             logger.warning(f"No valid orders found in response: {response[:100]}...")
-            
-            # For testing purposes, let's provide basic hold orders
-            # This will help us test the rest of the system
-            # TODO: Remove this once prompt issues are fixed
-            power = "UNKNOWN"  # Will be filled in by caller context
-            try:
-                # Try to infer power from response context or use a default
-                power_mentions = [p for p in ALL_POWERS if p.lower() in response.lower()]
-                if power_mentions:
-                    power = power_mentions[0]
-            except:
-                pass
-                
-            logger.info(f"Providing default hold orders for testing purposes")
-            # We'll let the caller handle providing appropriate default orders
         
         # Log parsed orders for debugging
         logger.debug(f"Parsed orders from response: {orders}")
