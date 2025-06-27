@@ -364,14 +364,17 @@ class DiplomacyMultiTurnEnv:
                     power_orders[power] = []
                     continue
                     
-                # Extract orders from LLM response
-                orders = self._parse_orders_from_response(order_responses[i])
+                # Extract orders from LLM response, passing the power name for better logging
+                orders = self._parse_orders_from_response(order_responses[i], power)
                 
                 # If no orders found, provide default hold orders for testing
                 if not orders:
                     hold_orders = self._get_default_hold_orders(power)
                     if hold_orders:
-                        logger.info(f"Using default hold orders for {power}: {hold_orders}")
+                        # Log default orders with clear formatting
+                        logger.info(f"Using default hold orders for {power}:")
+                        for order in hold_orders:
+                            logger.info(f"  - {order}")
                         orders = hold_orders
                 
                 power_orders[power] = orders
@@ -382,13 +385,23 @@ class DiplomacyMultiTurnEnv:
         # Submit orders to game
         for power, orders in power_orders.items():
             if orders:  # Only set orders if there are any
-                logger.info(f"Setting orders for {power}: {orders}")
+                # Log orders with clear formatting
+                logger.info(f"Setting orders for {power}:")
+                for order in orders:
+                    logger.info(f"  - {order}")
                 try:
                     self.game.set_orders(power, orders)
                 except Exception as e:
-                    logger.error(f"Failed to set orders for {power}: {orders}, Error: {e}")
+                    logger.error(f"Failed to set orders for {power} - Error: {e}")
+                    # Log full order list for debugging without truncation
+                    if len(str(orders)) > 100:  # Only use detailed logging for long order lists
+                        logger.error(f"Invalid orders for {power}:")
+                        for idx, order in enumerate(orders):
+                            logger.error(f"  [{idx}]: {order}")
+                    else:
+                        logger.error(f"Invalid orders: {orders}")
             else:
-                logger.warning(f"No orders parsed for {power}")
+                logger.warning(f"No orders parsed for {power} - will skip this power's turn")
         
         # Process game phase
         try:
@@ -458,12 +471,13 @@ class DiplomacyMultiTurnEnv:
         
         return rewards
     
-    def _parse_orders_from_response(self, response: str) -> List[str]:
+    def _parse_orders_from_response(self, response: str, power: str = "Unknown") -> List[str]:
         """Extract valid orders from LLM response (handles both JSON and plain text)"""
         orders = []
         
-        # Log the raw response for debugging
-        logger.debug(f"Raw LLM response: {response[:200]}...")
+        # Use the power-aware logging utility if power is provided
+        # Log the raw response for debugging - full response will be logged if no orders are found
+        logger.debug(f"Raw LLM response from {power} (first 200 chars): {response[:200]}...")
         
         # First, try to parse as JSON (most common format from LLMs)
         try:
@@ -518,12 +532,13 @@ class DiplomacyMultiTurnEnv:
                     cleaned_order = ' '.join(line.split())
                     orders.append(cleaned_order)
         
-        # If still no orders found, provide default hold orders for testing
+        # If still no orders found, log the full response using our utility method
         if not orders:
-            logger.warning(f"No valid orders found in response: {response[:100]}...")
-        
+            logger.warning(f"No valid orders found in response from {power} - logging full response:")
+            self._log_full_response(power, response, "FAILED ORDER PARSING")
+                
         # Log parsed orders for debugging
-        logger.debug(f"Parsed orders from response: {orders}")
+        logger.debug(f"Parsed orders from {power}: {orders}")
         return orders
     
     def _get_default_hold_orders(self, power: str) -> List[str]:
@@ -595,3 +610,35 @@ class DiplomacyMultiTurnEnv:
         self._initialize_agents()
         
         logger.info("Environment reset for new episode")
+    
+    def _log_full_response(self, power: str, response: str, context: str = "LLM Response") -> None:
+        """
+        Log the full LLM response without truncation to aid in debugging.
+        
+        Args:
+            power: The power (country) the response is for
+            response: The full LLM response text
+            context: Context information about what the response is for
+        """
+        # Log header with clear separation
+        logger.debug(f"===== FULL {context} FOR {power} =====")
+        
+        # Break the response into chunks of 1000 characters for better logging
+        chunk_size = 1000
+        num_chunks = (len(response) + chunk_size - 1) // chunk_size
+        
+        # Only warn about chunking for large responses
+        if num_chunks > 1:
+            logger.debug(f"Response is {len(response)} characters, logging in {num_chunks} chunks")
+        
+        # Log each chunk with a clear prefix
+        for i in range(0, len(response), chunk_size):
+            chunk = response[i:i+chunk_size]
+            chunk_num = i // chunk_size + 1
+            if num_chunks > 1:
+                logger.debug(f"CHUNK {chunk_num}/{num_chunks}: {chunk}")
+            else:
+                logger.debug(f"{chunk}")
+                
+        # Log footer
+        logger.debug(f"===== END {context} FOR {power} =====")
