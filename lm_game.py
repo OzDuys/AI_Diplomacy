@@ -31,6 +31,7 @@ from ai_diplomacy.game_logic import (
     initialize_new_game,
 )
 from ai_diplomacy.diary_logic import run_diary_consolidation
+from ai_diplomacy.wandb_llm_logger import get_llm_logger, initialize_llm_logging
 
 dotenv.load_dotenv()
 
@@ -220,6 +221,38 @@ async def main():
             game.phase_summaries = {}
         agents = await initialize_new_game(run_config, game, game_history, llm_log_file_path)
 
+    # --- Initialize W&B LLM Logging ---
+    # Only initialize if at least one agent uses a supported model
+    use_wandb_logging = any(
+        hasattr(agent, 'client') for agent in agents.values()
+    )
+    
+    if use_wandb_logging:
+        try:
+            llm_logger = initialize_llm_logging(
+                project_name="diplomacy-llm-interactions",
+                enabled=True
+            )
+            
+            # Start game session
+            game_config = {
+                'run_dir': run_config.run_dir,
+                'max_year': run_config.max_year,
+                'num_negotiation_rounds': run_config.num_negotiation_rounds,
+                'planning_phase': getattr(run_config, 'planning_phase', False),
+                'models': {power: agent.client.model_name for power, agent in agents.items()},
+                'is_resuming': is_resuming,
+            }
+            
+            llm_logger.start_game_session(
+                game_id=run_config.run_dir or "default_game",
+                game_config=game_config,
+                is_grpo_training=False
+            )
+            logger.info("W&B LLM logging initialized for game session")
+        except Exception as e:
+            logger.warning(f"Failed to initialize W&B LLM logging: {e}")
+
     # --- 4. Main Game Loop ---
     while not game.is_game_done:
         phase_start = time.time()
@@ -244,10 +277,12 @@ async def main():
                 game_history = await conduct_negotiations(
                     game, agents, game_history, model_error_stats,
                     max_rounds=run_config.num_negotiation_rounds, log_file_path=llm_log_file_path,
+                    game_id=run_config.run_dir or "default_game",
                 )
             if run_config.planning_phase:
                 await planning_phase(
                     game, agents, game_history, model_error_stats, log_file_path=llm_log_file_path,
+                    game_id=run_config.run_dir or "default_game",
                 )
             
             neg_diary_tasks = [
@@ -275,6 +310,7 @@ async def main():
                         agent_goals=agent.goals, agent_relationships=agent.relationships,
                         agent_private_diary_str=agent.format_private_diary_for_prompt(),
                         log_file_path=llm_log_file_path, phase=current_phase,
+                        game_id=run_config.run_dir or "default_game",
                     )
                 )
         
@@ -345,6 +381,15 @@ async def main():
         overview_file.write(json.dumps(model_error_stats) + "\n")
         overview_file.write(json.dumps(getattr(game, 'power_model_map', {})) + "\n")
         overview_file.write(json.dumps(vars(run_config)) + "\n")
+
+    # --- End W&B LLM Logging Session ---
+    if use_wandb_logging:
+        try:
+            llm_logger = get_llm_logger()
+            llm_logger.end_game_session(run_config.run_dir or "default_game")
+            logger.info("W&B LLM logging session ended")
+        except Exception as e:
+            logger.warning(f"Failed to end W&B LLM logging session: {e}")
 
     logger.info("Done.")
 

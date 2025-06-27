@@ -27,6 +27,7 @@ async def conduct_negotiations(
     model_error_stats: Dict[str, Dict[str, int]],
     log_file_path: str,
     max_rounds: int = 3,
+    game_id: str = None,
 ):
     """
     Conducts a round-robin conversation among all non-eliminated powers.
@@ -83,6 +84,7 @@ async def conduct_negotiations(
                     agent_goals=agent.goals,
                     agent_relationships=agent.relationships,
                     agent_private_diary_str=agent.format_private_diary_for_prompt(),
+                    game_id=game_id,
                 )
             )
             power_names_for_tasks.append(power_name)

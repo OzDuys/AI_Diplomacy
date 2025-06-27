@@ -79,6 +79,7 @@ class BaseModelClient:
         agent_goals: Optional[List[str]] = None,
         agent_relationships: Optional[Dict[str, str]] = None,
         agent_private_diary_str: Optional[str] = None, # Added
+        game_id: Optional[str] = None,  # Added for W&B logging
     ) -> List[str]:
         """
         1) Builds the prompt with conversation context if available
@@ -115,7 +116,8 @@ class BaseModelClient:
                 power_name=power_name,
                 phase=phase,
                 response_type='order', # Context for run_llm_and_log's own error logging
-                temperature=0
+                temperature=0,
+                game_id=game_id
             )
             logger.debug(
                 f"[{self.model_name}] Raw LLM response for {power_name} orders:\n{raw_response}"
@@ -499,6 +501,7 @@ class BaseModelClient:
         agent_goals: Optional[List[str]] = None,
         agent_relationships: Optional[Dict[str, str]] = None,
         agent_private_diary_str: Optional[str] = None, # Added
+        game_id: Optional[str] = None,  # Added for W&B logging
     ) -> str:
         
         prompt = self.build_planning_prompt(
@@ -522,6 +525,7 @@ class BaseModelClient:
             power_name=power_name,
             phase=game_phase, # Use game_phase for logging
             response_type='plan_reply', # Changed from 'plan' to avoid confusion
+            game_id=game_id
         )
         logger.debug(f"[{self.model_name}] Raw LLM response for {power_name} planning reply:\n{raw_response}")
         return raw_response
@@ -538,7 +542,8 @@ class BaseModelClient:
         active_powers: Optional[List[str]] = None, 
         agent_goals: Optional[List[str]] = None,
         agent_relationships: Optional[Dict[str, str]] = None,
-        agent_private_diary_str: Optional[str] = None, 
+        agent_private_diary_str: Optional[str] = None,
+        game_id: Optional[str] = None,  # Added for W&B logging
     ) -> List[Dict[str, str]]:
         """
         Generates a negotiation message, considering agent state.
@@ -569,6 +574,7 @@ class BaseModelClient:
                 power_name=power_name,
                 phase=game_phase, 
                 response_type='negotiation', # For run_llm_and_log's internal context
+                game_id=game_id
             )
             logger.debug(f"[{self.model_name}] Raw LLM response for {power_name}:\n{raw_response}")
             
@@ -696,6 +702,7 @@ class BaseModelClient:
         agent_goals: Optional[List[str]] = None,
         agent_relationships: Optional[Dict[str, str]] = None,
         agent_private_diary_str: Optional[str] = None, # Added
+        game_id: Optional[str] = None,  # Added for W&B logging
     ) -> str:
         """
         Generates a strategic plan for the given power based on the current state.
@@ -742,6 +749,7 @@ class BaseModelClient:
                 power_name=power_name,
                 phase=game.current_short_phase, 
                 response_type='plan_generation', # More specific type for run_llm_and_log context
+                game_id=game_id
             )
             logger.debug(f"[{self.model_name}] Raw LLM response for {power_name} plan generation:\n{raw_plan_response}")
             # No parsing needed for the plan, return the raw string

@@ -8,12 +8,16 @@ from typing import TYPE_CHECKING
 import random
 import string
 import json
+import time
 
 # Avoid circular import for type hinting
 if TYPE_CHECKING:
     from .clients import BaseModelClient
     # If DiplomacyAgent is used for type hinting for an 'agent' parameter:
     # from .agent import DiplomacyAgent 
+
+# Import W&B logging functions
+from .wandb_llm_logger import log_order_generation, log_negotiation, log_planning, log_grpo_interaction
 
 logger = logging.getLogger("utils")
 logger.setLevel(logging.INFO)
@@ -113,6 +117,7 @@ async def get_valid_orders(
     agent_private_diary_str: Optional[str] = None, # Added new parameter
     log_file_path: str = None,
     phase: str = None,
+    game_id: Optional[str] = None,  # Added for W&B logging
 ) -> List[str]:
     """
     Tries up to 'max_retries' to generate and validate orders.
@@ -133,6 +138,7 @@ async def get_valid_orders(
         agent_private_diary_str=agent_private_diary_str, # Pass the diary string
         log_file_path=log_file_path,
         phase=phase,
+        game_id=game_id,
     )
     
     # Initialize list to track invalid order information
@@ -361,15 +367,72 @@ async def run_llm_and_log(
     phase: str, # Kept for context, but not used for logging here
     response_type: str, # Kept for context, but not used for logging here
     temperature: float = 0.0,
+    game_id: Optional[str] = None,  # Added for W&B logging
 ) -> str:
-    """Calls the client's generate_response and returns the raw output. Logging is handled by the caller."""
+    """Calls the client's generate_response and returns the raw output. Includes W&B logging."""
     raw_response = "" # Initialize in case of error
+    start_time = time.time()
+    success = True
+    error_message = None
+    
     try:
         raw_response = await client.generate_response(prompt, temperature=temperature)
+        if not raw_response:
+            success = False
+            error_message = "Empty response from LLM"
     except Exception as e:
+        success = False
+        error_message = str(e)
         # Log the API call error. The caller will decide how to log this in llm_responses.csv
         logger.error(f"API Error during LLM call for {client.model_name}/{power_name}/{response_type} in phase {phase}: {e}", exc_info=True)
         # raw_response remains "" indicating failure to the caller
+    
+    # Calculate response time
+    end_time = time.time()
+    response_time_ms = (end_time - start_time) * 1000
+    
+    # Log to W&B if game_id is provided
+    if game_id and power_name:
+        try:
+            if response_type in ['order', 'order_generation']:
+                log_order_generation(
+                    game_id=game_id,
+                    model_name=client.model_name,
+                    power_name=power_name,
+                    phase=phase,
+                    prompt=prompt,
+                    response=raw_response,
+                    success=success,
+                    error_message=error_message,
+                    response_time_ms=response_time_ms
+                )
+            elif response_type in ['negotiation', 'negotiation_message']:
+                log_negotiation(
+                    game_id=game_id,
+                    model_name=client.model_name,
+                    power_name=power_name,
+                    phase=phase,
+                    prompt=prompt,
+                    response=raw_response,
+                    success=success,
+                    error_message=error_message,
+                    response_time_ms=response_time_ms
+                )
+            elif response_type in ['plan', 'plan_reply', 'plan_generation', 'planning']:
+                log_planning(
+                    game_id=game_id,
+                    model_name=client.model_name,
+                    power_name=power_name,
+                    phase=phase,
+                    prompt=prompt,
+                    response=raw_response,
+                    success=success,
+                    error_message=error_message,
+                    response_time_ms=response_time_ms
+                )
+        except Exception as wb_error:
+            logger.warning(f"Failed to log to W&B: {wb_error}")
+    
     return raw_response
 
 # This generates a few lines of random alphanum chars to inject into the 

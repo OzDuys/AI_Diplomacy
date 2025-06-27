@@ -41,6 +41,7 @@ except ImportError:
 
 from .grpo_env import DiplomacyMultiTurnEnv, DecisionType
 from .grpo_rewards import analyze_alliance_patterns
+from .wandb_llm_logger import log_grpo_interaction, get_llm_logger
 
 logger = logging.getLogger(__name__)
 
@@ -173,6 +174,10 @@ class DiplomacyGRPOTrainer:
         
         # Initialize W&B if requested
         self.use_wandb = config.use_wandb and WANDB_AVAILABLE
+        
+        # Initialize LLM logger for detailed interaction tracking
+        self.llm_logger = get_llm_logger()
+        
         if self.use_wandb:
             try:
                 # Create enhanced config with metadata about field types
@@ -236,16 +241,26 @@ class DiplomacyGRPOTrainer:
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(self.config.torch_seed)
     
-    def generate_batch_responses(self, prompts: List[str]) -> List[str]:
+    def generate_batch_responses(self, prompts: List[str], 
+                                   episode: Optional[int] = None,
+                                   step: Optional[int] = None,
+                                   env_ids: Optional[List[int]] = None,
+                                   power_names: Optional[List[str]] = None) -> List[str]:
         """
         Generate responses for all 7 agents using batched inference.
         
         Args:
             prompts: List of 7 prompts (one per agent)
+            episode: Current GRPO episode for logging
+            step: Current GRPO step for logging  
+            env_ids: Environment IDs for each prompt
+            power_names: Power names for each prompt
             
         Returns:
             List of 7 responses
         """
+        start_time = time.time()
+        
         # Set consistent random seed for reproducible batching
         torch.manual_seed(self.config.torch_seed)
         
@@ -275,6 +290,9 @@ class DiplomacyGRPOTrainer:
                 num_beams=1,     # Disable beam search for speed
             )
         
+        end_time = time.time()
+        response_time_ms = (end_time - start_time) * 1000
+        
         # Decode responses (remove input prompt)
         responses = []
         num_prompts = len(prompts)
@@ -296,6 +314,29 @@ class DiplomacyGRPOTrainer:
             else:
                 responses.append("")  # Fallback
         
+        # Log to W&B if enabled and we have the necessary information
+        if (self.use_wandb and episode is not None and step is not None and 
+            env_ids is not None and power_names is not None):
+            try:
+                for i, (prompt, response) in enumerate(zip(prompts, responses)):
+                    env_id = env_ids[i] if i < len(env_ids) else 0
+                    power_name = power_names[i] if i < len(power_names) else f'agent_{i}'
+                    game_id = f"grpo_game_{env_id}_episode_{episode}"
+                    
+                    log_grpo_interaction(
+                        game_id=game_id,
+                        model_name=self.config.model_name,
+                        episode=episode,
+                        step=step,
+                        prompt=prompt,
+                        response=response,
+                        power_name=power_name,
+                        success=bool(response),  # Consider empty response as failure
+                        response_time_ms=response_time_ms / len(prompts),  # Approximate per-response time
+                    )
+            except Exception as e:
+                logger.warning(f"Failed to log GRPO interactions to W&B: {e}")
+        
         return responses
     
     def run_episode(self) -> Dict[str, Any]:
@@ -306,6 +347,24 @@ class DiplomacyGRPOTrainer:
             Combined episode statistics and data for GRPO update
         """
         logger.info(f"Starting episode batch {self.episode_count + 1} with {self.num_parallel_games} parallel games")
+        
+        # Start W&B game sessions for each environment
+        if self.use_wandb:
+            for i, env in enumerate(self.envs):
+                game_id = f"grpo_game_{i}_episode_{self.episode_count}"
+                game_config = {
+                    'episode': self.episode_count,
+                    'env_id': i,
+                    'model_name': self.config.model_name,
+                    'max_year': self.config.max_year,
+                    'num_negotiation_rounds': self.config.num_negotiation_rounds,
+                }
+                self.llm_logger.start_game_session(
+                    game_id=game_id,
+                    game_config=game_config,
+                    is_grpo_training=True,
+                    grpo_episode=self.episode_count
+                )
         
         # Reset all environments
         for env in self.envs:
@@ -329,8 +388,23 @@ class DiplomacyGRPOTrainer:
             if not all_prompts:
                 break
             
+            # Prepare additional data for logging
+            env_ids_for_logging = []
+            power_names_for_logging = []
+            for i, env in enumerate(self.envs):
+                if not env.is_completed():
+                    num_agents = len(env.agents)
+                    env_ids_for_logging.extend([i] * num_agents)
+                    power_names_for_logging.extend(list(env.agents.keys()))
+            
             # Generate responses for all prompts in one batch
-            responses = self.generate_batch_responses(all_prompts)
+            responses = self.generate_batch_responses(
+                all_prompts,
+                episode=self.episode_count,
+                step=step_count,
+                env_ids=env_ids_for_logging,
+                power_names=power_names_for_logging
+            )
             
             # Distribute responses back to environments
             response_idx = 0
@@ -468,6 +542,12 @@ class DiplomacyGRPOTrainer:
             'total_steps': sum(stats['total_steps'] for stats in all_episode_stats),
             'summary': f"Batch {self.episode_count + 1}: {self.num_parallel_games} games, avg reward: {np.mean(all_final_rewards):.2f}"
         }
+        
+        # End W&B game sessions
+        if self.use_wandb:
+            for i in range(self.num_parallel_games):
+                game_id = f"grpo_game_{i}_episode_{self.episode_count}"
+                self.llm_logger.end_game_session(game_id)
         
         logger.info(f"Episode batch {self.episode_count + 1} completed: {combined_stats['summary']}")
         
