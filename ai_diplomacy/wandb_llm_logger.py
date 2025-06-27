@@ -9,7 +9,7 @@ Supports parallel game separation and detailed analytics.
 import logging
 import time
 import json
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass, asdict
 from datetime import datetime
 import hashlib
@@ -289,9 +289,11 @@ class WandBLLMLogger:
         
         # Define metrics for better visualization
         wandb.define_metric("timestamp")
-        wandb.define_metric("sessions/*/total_interactions", step_metric="timestamp")
-        wandb.define_metric("interactions/*/response_time_ms", step_metric="timestamp")
-        wandb.define_metric("interactions/*/success_rate", step_metric="timestamp")
+        wandb.define_metric("step")
+        wandb.define_metric("episode_batch")
+        
+        # Note: W&B doesn't support glob patterns in define_metric
+        # Individual metrics will be logged with full paths as needed
         
         logger.info("W&B run initialized for LLM interaction logging")
     
@@ -386,7 +388,7 @@ class WandBLLMLogger:
         }
         return encoding.get(interaction_type, 0)
     
-    def _extract_phase_info(self, phase: str) -> tuple[Optional[int], Optional[int]]:
+    def _extract_phase_info(self, phase: str) -> Tuple[Optional[int], Optional[int]]:
         """Extract numeric year and season from phase string."""
         try:
             if len(phase) >= 5 and phase[1:5].isdigit():

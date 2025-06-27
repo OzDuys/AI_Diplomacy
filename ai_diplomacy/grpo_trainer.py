@@ -564,7 +564,8 @@ class DiplomacyGRPOTrainer:
         
         # Find winner (highest final reward)
         winner_idx = np.argmax(final_rewards)
-        winner_power = sorted(list(self.env.agents.keys()))[winner_idx]
+        # Use the first environment to get power names (all envs have same powers)
+        winner_power = sorted(list(self.envs[0].agents.keys()))[winner_idx]
         
         # Game length (phases)
         game_phases = total_steps // 2  # Approximate (orders + negotiations)
@@ -601,11 +602,11 @@ class DiplomacyGRPOTrainer:
         episodes = []
         for step_data in episode_data:
             # Create episodes for each agent's decision
-            for i, (prompt, response, reward) in enumerate(zip(
+            for prompt, response, reward in zip(
                 step_data['prompts'], 
                 step_data['responses'], 
                 step_data['rewards']
-            )):
+            ):
                 episode = Episode(
                     prompt=prompt,
                     response=response,
@@ -718,7 +719,7 @@ class DiplomacyGRPOTrainer:
             }
             
             # Victory distribution over last 10 episodes
-            for power in sorted(self.env.agents.keys()):
+            for power in sorted(self.envs[0].agents.keys()):
                 wins = victory_counts.get(power, 0)
                 progress_metrics[f'training/victories_last_10/{power}'] = wins
                 progress_metrics[f'training/win_rate_last_10/{power}'] = wins / min(10, self.episode_count + 1)
@@ -799,7 +800,7 @@ class DiplomacyGRPOTrainer:
         for winner in self.training_stats['victory_distribution']:
             victory_counts[winner] = victory_counts.get(winner, 0) + 1
         
-        for power in sorted(self.env.agents.keys()):
+        for power in sorted(self.envs[0].agents.keys()):
             wins = victory_counts.get(power, 0)
             summary_metrics[f'summary/total_victories/{power}'] = wins
             summary_metrics[f'summary/win_rate/{power}'] = wins / total_episodes
