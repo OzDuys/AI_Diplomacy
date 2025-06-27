@@ -71,7 +71,7 @@ class TrainingConfig:
     checkpoint_dir: str = "checkpoints"
     
     # Logging
-    log_level: str = "INFO"
+    log_level: str = "INFO"  # Set to "WARNING" to reduce verbosity further
     log_alliance_analysis: bool = True
     use_wandb: bool = True
     wandb_project: str = "diplomacy-grpo"
@@ -101,25 +101,53 @@ class DiplomacyGRPOTrainer:
         self._setup_logging()
         self._setup_random_seeds()
         
-        # Initialize model and tokenizer
+        # Initialize model and tokenizer with optimized settings
         self.tokenizer = AutoTokenizer.from_pretrained(config.model_name)
-        self.model = AutoModelForCausalLM.from_pretrained(
-            config.model_name,
-            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-            device_map="auto" if torch.cuda.is_available() else None
-        )
+        
+        # Optimize model loading for large VRAM
+        model_kwargs = {
+            "torch_dtype": torch.float16 if torch.cuda.is_available() else torch.float32,
+        }
+        
+        if torch.cuda.is_available():
+            # Use device_map for multi-GPU or optimize for single GPU
+            if torch.cuda.device_count() > 1:
+                model_kwargs["device_map"] = "auto"
+            else:
+                # For single GPU, load everything on GPU 0
+                model_kwargs["device_map"] = {"": 0}
+            
+            # Enable memory efficient attention if available
+            try:
+                model_kwargs["attn_implementation"] = "flash_attention_2"
+                logger.info("Using Flash Attention 2 for memory efficiency")
+            except:
+                logger.info("Flash Attention 2 not available, using default attention")
+        
+        self.model = AutoModelForCausalLM.from_pretrained(config.model_name, **model_kwargs)
+        
+        # Enable gradient checkpointing for memory efficiency during training
+        if hasattr(self.model, 'gradient_checkpointing_enable'):
+            self.model.gradient_checkpointing_enable()
+            logger.info("Gradient checkpointing enabled for memory efficiency")
         
         # Add padding token if not present
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
         
-        # Initialize environment
-        self.env = DiplomacyMultiTurnEnv(
-            model_name=config.model_name,
-            max_year=config.max_year,
-            num_negotiation_rounds=config.num_negotiation_rounds,
-            random_seed=config.random_seed
-        )
+        # Initialize environments for parallel training
+        self.num_parallel_games = config.batch_size // 7  # Number of parallel games
+        self.envs = []
+        for i in range(self.num_parallel_games):
+            env = DiplomacyMultiTurnEnv(
+                model_name=config.model_name,
+                max_year=config.max_year,
+                num_negotiation_rounds=config.num_negotiation_rounds,
+                random_seed=config.random_seed + i  # Different seed per game
+            )
+            self.envs.append(env)
+        
+        logger.info(f"Initialized {self.num_parallel_games} parallel game environments")
         
         # Initialize GRPO trainer
         if GRPOTrainer is not None:
@@ -152,14 +180,44 @@ class DiplomacyGRPOTrainer:
         self.use_wandb = config.use_wandb and WANDB_AVAILABLE
         if self.use_wandb:
             try:
+                # Create enhanced config with metadata about field types
+                wandb_config = asdict(config)
+                wandb_config.update({
+                    'field_types': {
+                        'numeric_fields': [
+                            'game_year', 'game_season', 'phase_type', 'decision_type_numeric',
+                            'step', 'episode_batch', 'active_games', 'winner_id',
+                            'avg_step_reward_all_games', 'centers_game_*'
+                        ],
+                        'categorical_fields': [
+                            'victory_AUSTRIA', 'victory_ENGLAND', 'victory_FRANCE', 
+                            'victory_GERMANY', 'victory_ITALY', 'victory_RUSSIA', 'victory_TURKEY'
+                        ]
+                    },
+                    'power_mapping': {
+                        'AUSTRIA': 0, 'ENGLAND': 1, 'FRANCE': 2, 'GERMANY': 3,
+                        'ITALY': 4, 'RUSSIA': 5, 'TURKEY': 6
+                    }
+                })
+                
                 wandb.init(
                     project=config.wandb_project,
                     entity=config.wandb_entity,
-                    config=asdict(config),
+                    config=wandb_config,
                     name=f"grpo-{config.model_name.replace('/', '-')}-{config.num_episodes}ep",
-                    tags=["grpo", "diplomacy", "multi-agent"]
+                    tags=["grpo", "diplomacy", "multi-agent", "numeric-optimized"]
                 )
-                logger.info("W&B logging initialized")
+                
+                # Define metric summaries to help W&B understand data types
+                wandb.define_metric("step")
+                wandb.define_metric("episode_batch")
+                wandb.define_metric("game_year", step_metric="step")
+                wandb.define_metric("game_season", step_metric="step")
+                wandb.define_metric("phase_type", step_metric="step")
+                wandb.define_metric("decision_type_numeric", step_metric="step")
+                wandb.define_metric("avg_step_reward_all_games", step_metric="step")
+                
+                logger.info("W&B logging initialized with enhanced field type definitions")
             except Exception as e:
                 logger.warning(f"Failed to initialize W&B: {e}")
                 self.use_wandb = False
@@ -208,83 +266,141 @@ class DiplomacyGRPOTrainer:
         if torch.cuda.is_available():
             inputs = {k: v.cuda() for k, v in inputs.items()}
         
-        # Generate responses
+        # Generate responses with optimized settings
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs,
-                max_new_tokens=200,  # Limit response length
+                max_new_tokens=512,  # Increased for longer responses
                 temperature=self.config.temperature,
                 top_p=self.config.top_p,
                 do_sample=True,
                 pad_token_id=self.tokenizer.eos_token_id,
-                num_return_sequences=1
+                num_return_sequences=self.config.num_generations,
+                use_cache=True,  # Enable KV cache for efficiency
+                num_beams=1,     # Disable beam search for speed
             )
         
         # Decode responses (remove input prompt)
         responses = []
-        for i, output in enumerate(outputs):
-            input_length = inputs['input_ids'][i].shape[0]
-            response_tokens = output[input_length:]
-            response = self.tokenizer.decode(response_tokens, skip_special_tokens=True)
-            responses.append(response.strip())
+        num_prompts = len(prompts)
+        
+        for i in range(num_prompts):
+            # Handle multiple generations per prompt
+            prompt_responses = []
+            for gen in range(self.config.num_generations):
+                output_idx = i * self.config.num_generations + gen
+                if output_idx < len(outputs):
+                    input_length = inputs['input_ids'][i].shape[0]
+                    response_tokens = outputs[output_idx][input_length:]
+                    response = self.tokenizer.decode(response_tokens, skip_special_tokens=True)
+                    prompt_responses.append(response.strip())
+            
+            # For now, take the first generation (could implement response selection here)
+            if prompt_responses:
+                responses.append(prompt_responses[0])
+            else:
+                responses.append("")  # Fallback
         
         return responses
     
     def run_episode(self) -> Dict[str, Any]:
         """
-        Run a single game episode and collect training data.
+        Run parallel game episodes and collect training data.
         
         Returns:
-            Episode statistics and data for GRPO update
+            Combined episode statistics and data for GRPO update
         """
-        logger.info(f"Starting episode {self.episode_count + 1}")
+        logger.info(f"Starting episode batch {self.episode_count + 1} with {self.num_parallel_games} parallel games")
         
-        # Reset environment
-        self.env.reset()
-        episode_data = []
+        # Reset all environments
+        for env in self.envs:
+            env.reset()
+        
+        all_episode_data = []
         step_count = 0
         
-        # Run game until completion
-        while not self.env.is_completed():
-            # Get prompts for current decision
-            prompts = self.env.get_batch_prompts()
+        # Run all games until completion
+        while any(not env.is_completed() for env in self.envs):
+            # Collect prompts from all active environments
+            all_prompts = []
+            active_env_indices = []
             
-            # Generate responses
-            responses = self.generate_batch_responses(prompts)
+            for i, env in enumerate(self.envs):
+                if not env.is_completed():
+                    prompts = env.get_batch_prompts()
+                    all_prompts.extend(prompts)
+                    active_env_indices.extend([i] * len(prompts))
             
-            # Process responses and get rewards
-            step_rewards, step_info = self.env.process_batch_responses(responses)
+            if not all_prompts:
+                break
             
-            # Store episode data
-            episode_data.append({
-                'step': step_count,
-                'prompts': prompts,
-                'responses': responses,
-                'rewards': step_rewards,
-                'info': step_info
-            })
+            # Generate responses for all prompts in one batch
+            responses = self.generate_batch_responses(all_prompts)
             
-            # Log step-level metrics to W&B
-            if self.use_wandb and self.config.log_step_rewards:
+            # Distribute responses back to environments
+            response_idx = 0
+            step_rewards_all = []
+            step_info_all = []
+            
+            for i, env in enumerate(self.envs):
+                if not env.is_completed():
+                    num_agents = len(env.agents)
+                    env_responses = responses[response_idx:response_idx + num_agents]
+                    response_idx += num_agents
+                    
+                    # Process responses for this environment
+                    step_rewards, step_info = env.process_batch_responses(env_responses)
+                    step_rewards_all.extend(step_rewards)
+                    step_info_all.append(step_info)
+                    
+                    # Store episode data for this environment
+                    all_episode_data.append({
+                        'env_id': i,
+                        'step': step_count,
+                        'prompts': env.get_batch_prompts(),
+                        'responses': env_responses,
+                        'rewards': step_rewards,
+                        'info': step_info
+                    })
+            
+            # Log aggregated step-level metrics to W&B
+            if self.use_wandb and self.config.log_step_rewards and step_rewards_all:
                 step_metrics = {
-                    f'step_reward/{power}': reward 
-                    for power, reward in zip(sorted(self.env.agents.keys()), step_rewards)
-                }
-                step_metrics.update({
                     'step': step_count,
-                    'phase': step_info['phase'],
-                    'decision_type': step_info['decision_type'],
-                    'episode': self.episode_count + 1,
-                    'avg_step_reward': np.mean(step_rewards),
-                    'max_step_reward': np.max(step_rewards),
-                    'min_step_reward': np.min(step_rewards)
-                })
+                    'episode_batch': self.episode_count + 1,
+                    'active_games': len([env for env in self.envs if not env.is_completed()]),
+                    'avg_step_reward_all_games': np.mean(step_rewards_all),
+                    'max_step_reward_all_games': np.max(step_rewards_all),
+                    'min_step_reward_all_games': np.min(step_rewards_all)
+                }
                 
-                # Log center changes if available
+                # Add phase and decision type info from first active environment (avoid string conflicts)
+                for env in self.envs:
+                    if not env.is_completed():
+                        # Convert phase to numeric representation for better visualization
+                        phase_str = env.current_phase
+                        # Extract year and season for numeric tracking
+                        if len(phase_str) >= 5 and phase_str[1:5].isdigit():
+                            year = int(phase_str[1:5])
+                            season_map = {'S': 0, 'F': 1, 'W': 2}  # Spring, Fall, Winter
+                            season = season_map.get(phase_str[0], 0)
+                            phase_type = 1 if 'M' in phase_str else 0  # Movement vs Adjustment
+                            
+                            step_metrics['game_year'] = year
+                            step_metrics['game_season'] = season
+                            step_metrics['phase_type'] = phase_type
+                        
+                        # Convert decision type to numeric
+                        step_metrics['decision_type_numeric'] = 1 if env.current_decision_type.value == "orders" else 0
+                        break
+                
+                # Log center changes across all games
                 if self.config.log_center_changes:
-                    current_state = self.env.get_current_state()
-                    for power, centers in current_state.supply_centers.items():
-                        step_metrics[f'centers/{power}'] = len(centers)
+                    for env_idx, env in enumerate(self.envs):
+                        if not env.is_completed():
+                            current_state = env.get_current_state()
+                            for power, centers in current_state.supply_centers.items():
+                                step_metrics[f'centers_game_{env_idx}/{power}'] = len(centers)
                 
                 wandb.log(step_metrics)
             
@@ -292,67 +408,78 @@ class DiplomacyGRPOTrainer:
             
             # Log progress periodically
             if step_count % 10 == 0:
-                logger.debug(f"Episode {self.episode_count + 1}, Step {step_count}")
+                active_games = len([env for env in self.envs if not env.is_completed()])
+                logger.debug(f"Episode batch {self.episode_count + 1}, Step {step_count}, Active games: {active_games}")
         
-        # Get final rewards
-        final_rewards = self.env.get_final_rewards()
+        # Collect final results from all environments
+        all_final_rewards = []
+        all_episode_stats = []
+        all_alliance_analyses = []
         
-        # Add final rewards to last step
-        if episode_data:
-            episode_data[-1]['final_rewards'] = final_rewards
-        
-        # Calculate episode statistics
-        episode_stats = self._calculate_episode_stats(episode_data, final_rewards)
-        alliance_analysis = analyze_alliance_patterns(self.env.alliance_tracker)
+        for env_idx, env in enumerate(self.envs):
+            final_rewards = env.get_final_rewards()
+            all_final_rewards.extend(final_rewards)
+            
+            # Calculate stats for this environment
+            env_episode_data = [data for data in all_episode_data if data['env_id'] == env_idx]
+            episode_stats = self._calculate_episode_stats(env_episode_data, final_rewards)
+            episode_stats['env_id'] = env_idx
+            all_episode_stats.append(episode_stats)
+            
+            alliance_analysis = analyze_alliance_patterns(env.alliance_tracker)
+            alliance_analysis['env_id'] = env_idx
+            all_alliance_analyses.append(alliance_analysis)
         
         # Log comprehensive episode metrics to W&B
         if self.use_wandb:
-            episode_metrics = {
-                'episode': self.episode_count + 1,
-                'game_length_steps': episode_stats['total_steps'],
-                'game_length_phases': episode_stats['game_length_phases'],
-                'winner': episode_stats['winner'],
-                'avg_final_reward': np.mean(final_rewards),
-                'max_final_reward': np.max(final_rewards),
-                'min_final_reward': np.min(final_rewards),
-                'reward_variance': np.var(final_rewards),
-                'total_alliances_formed': alliance_analysis['total_alliances_formed'],
-                'alliances_broken': alliance_analysis['alliances_broken'],
-                'betrayals_detected': alliance_analysis['betrayals_detected']
+            # Aggregate metrics across all games
+            avg_final_reward = np.mean(all_final_rewards)
+            total_alliances = sum(analysis['total_alliances_formed'] for analysis in all_alliance_analyses)
+            total_betrayals = sum(analysis['betrayals_detected'] for analysis in all_alliance_analyses)
+            
+            batch_metrics = {
+                'episode_batch': self.episode_count + 1,
+                'parallel_games': self.num_parallel_games,
+                'avg_final_reward_all_games': avg_final_reward,
+                'max_final_reward_all_games': np.max(all_final_rewards),
+                'min_final_reward_all_games': np.min(all_final_rewards),
+                'total_alliances_all_games': total_alliances,
+                'total_betrayals_all_games': total_betrayals,
+                'avg_game_length': np.mean([stats['total_steps'] for stats in all_episode_stats])
             }
             
-            # Individual power final rewards
-            for power, reward in zip(sorted(self.env.agents.keys()), final_rewards):
-                episode_metrics[f'final_reward/{power}'] = reward
+            # Per-game detailed metrics with numeric winner encoding
+            power_to_id = {power: i for i, power in enumerate(sorted(['AUSTRIA', 'ENGLAND', 'FRANCE', 'GERMANY', 'ITALY', 'RUSSIA', 'TURKEY']))}
             
-            # Final center counts and changes
-            for power, power_stats in alliance_analysis['power_stats'].items():
-                episode_metrics[f'final_centers/{power}'] = power_stats['final_centers']
-                # Calculate center change from start
-                if len(self.env.alliance_tracker.power_stats[power].supply_centers) > 1:
-                    start_centers = self.env.alliance_tracker.power_stats[power].supply_centers[0]
-                    center_change = power_stats['final_centers'] - start_centers
-                    episode_metrics[f'center_change/{power}'] = center_change
+            for env_idx, (stats, analysis) in enumerate(zip(all_episode_stats, all_alliance_analyses)):
+                # Convert winner to numeric ID to avoid string conflicts
+                winner_id = power_to_id.get(stats['winner'], -1)
+                batch_metrics[f'game_{env_idx}/winner_id'] = winner_id
+                batch_metrics[f'game_{env_idx}/game_length'] = stats['total_steps']
+                batch_metrics[f'game_{env_idx}/alliances_formed'] = analysis['total_alliances_formed']
+                batch_metrics[f'game_{env_idx}/betrayals'] = analysis['betrayals_detected']
                 
-                # Alliance and betrayal stats per power
-                episode_metrics[f'alliances_formed/{power}'] = power_stats['alliances_formed']
-                episode_metrics[f'alliances_broken/{power}'] = power_stats['alliances_broken']
-                episode_metrics[f'betrayals_committed/{power}'] = power_stats['betrayals_committed']
-                episode_metrics[f'betrayals_suffered/{power}'] = power_stats['betrayals_suffered']
-                episode_metrics[f'eliminated/{power}'] = 1 if power_stats['eliminated'] else 0
+                # Add per-power victory flags for this game
+                for power, power_id in power_to_id.items():
+                    batch_metrics[f'game_{env_idx}/victory_{power}'] = 1 if stats['winner'] == power else 0
             
-            # Victory distribution (one-hot encoding)
-            for power in sorted(self.env.agents.keys()):
-                episode_metrics[f'victory/{power}'] = 1 if power == episode_stats['winner'] else 0
-            
-            wandb.log(episode_metrics)
+            wandb.log(batch_metrics)
         
-        logger.info(f"Episode {self.episode_count + 1} completed: {episode_stats['summary']}")
+        # Create combined results
+        combined_stats = {
+            'parallel_games': self.num_parallel_games,
+            'individual_game_stats': all_episode_stats,
+            'avg_final_reward': np.mean(all_final_rewards),
+            'total_steps': sum(stats['total_steps'] for stats in all_episode_stats),
+            'summary': f"Batch {self.episode_count + 1}: {self.num_parallel_games} games, avg reward: {np.mean(all_final_rewards):.2f}"
+        }
+        
+        logger.info(f"Episode batch {self.episode_count + 1} completed: {combined_stats['summary']}")
         
         return {
-            'episode_data': episode_data,
-            'stats': episode_stats,
-            'alliance_analysis': alliance_analysis
+            'episode_data': all_episode_data,
+            'stats': combined_stats,
+            'alliance_analysis': all_alliance_analyses
         }
     
     def _calculate_episode_stats(self, episode_data: List[Dict], final_rewards: List[float]) -> Dict[str, Any]:

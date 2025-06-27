@@ -259,12 +259,12 @@ class DiplomacyMultiTurnEnv:
                 # Generate military orders prompt
                 possible_orders = self._get_possible_orders_for_power(power)
                 
-                # Debug: Log possible orders for troubleshooting
-                logger.debug(f"Possible orders for {power}: {len(possible_orders)} orders")
-                if possible_orders:
-                    logger.debug(f"Sample orders for {power}: {possible_orders[:3]}")
-                else:
+                # Debug: Log possible orders for troubleshooting (reduced verbosity)
+                if not possible_orders:
                     logger.warning(f"No possible orders found for {power}!")
+                elif len(possible_orders) == 0:
+                    logger.debug(f"Empty order set for {power}")
+                # Removed verbose order listing to reduce log clutter
                 
                 prompt = construct_order_generation_prompt(
                     system_prompt=agent.client.system_prompt,
@@ -295,16 +295,10 @@ class DiplomacyMultiTurnEnv:
             
             prompts.append(prompt)
             
-        # Debug: Log the first prompt to see what's being sent to the LLM
+        # Debug: Log prompt info (reduced verbosity)
         if prompts:
-            first_power = sorted(ALL_POWERS)[0]
-            logger.debug(f"Sample prompt for {first_power}: {prompts[0][:500]}...")
-            
-            # Also log system prompts for all powers to debug Churchill issue
-            for power in sorted(ALL_POWERS):
-                agent = self.agents[power]
-                system_prompt = agent.client.system_prompt
-                logger.debug(f"{power} system prompt: {system_prompt[:200]}...")
+            logger.debug(f"Generated {len(prompts)} prompts for current decision type")
+            # Removed verbose prompt and system prompt logging to reduce clutter
             
         return prompts
     

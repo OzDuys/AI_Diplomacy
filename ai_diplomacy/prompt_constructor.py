@@ -43,11 +43,11 @@ def build_context_prompt(
     """
     context_template = load_prompt("context_prompt.txt", prompts_dir=prompts_dir)
 
-    # === Agent State Debug Logging ===
+    # === Agent State Debug Logging (reduced verbosity) ===
     if agent_goals:
-        logger.debug(f"Using goals for {power_name}: {agent_goals}")
+        logger.debug(f"Using {len(agent_goals)} goals for {power_name}")
     if agent_relationships:
-        logger.debug(f"Using relationships for {power_name}: {agent_relationships}")
+        logger.debug(f"Using {len(agent_relationships)} relationships for {power_name}")
     if agent_private_diary:
         logger.debug(f"Using private diary for {power_name}: {agent_private_diary[:200]}...")
     # ================================
