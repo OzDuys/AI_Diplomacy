@@ -1,40 +1,51 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "ai-diplomacy"
 version = "0.1.0"
-description = "Add your description here"
+description = "AI Diplomacy - Multi-agent reinforcement learning for Diplomacy game"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.8"
 dependencies = [
-    "anthropic>=0.54.0",
-    "bcrypt>=4.3.0",
+    "anthropic>=0.34.0",
+    "bcrypt>=4.0.0",
     "coloredlogs>=15.0.1",
-    "dotenv>=0.9.9",
-    "google-genai>=1.21.1",
-    "google-generativeai>=0.8.5",
-    "json-repair>=0.47.2",
-    "json5>=0.12.0",
-    "matplotlib>=3.10.3",
-    "openai>=1.90.0",
-    "pylint>=2.3.0",
-    "pytest>=4.4.0",
-    "pytest-xdist>=3.7.0",
-    "python-dateutil>=2.9.0.post0",
-    "pytz>=2025.2",
-    "seaborn>=0.13.2",
-    "sphinx>=8.2.3",
-    "sphinx-copybutton>=0.5.2",
-    "sphinx-rtd-theme>=3.0.2",
-    "together>=1.5.17",
-    "tornado>=5.0",
-    "tqdm>=4.67.1",
-    "ujson>=5.10.0",
+    "python-dotenv>=0.19.0",
+    "google-generativeai>=0.3.0",
+    "json-repair>=0.25.0",
+    "json5>=0.9.0",
+    "matplotlib>=3.5.0",
+    "openai>=1.0.0",
+    "pylint>=2.15.0",
+    "pytest>=7.0.0",
+    "pytest-xdist>=2.5.0",
+    "python-dateutil>=2.8.0",
+    "pytz>=2022.1",
+    "seaborn>=0.11.0",
+    "sphinx>=4.0.0",
+    "sphinx-copybutton>=0.4.0",
+    "sphinx-rtd-theme>=1.0.0",
+    "together>=0.2.0",
+    "tornado>=6.0",
+    "tqdm>=4.60.0",
+    "ujson>=5.0.0",
     # GRPO training dependencies
-    "torch>=2.0.0",
-    "transformers>=4.35.0",
+    "torch>=1.13.0",
+    "transformers>=4.21.0",
     "accelerate>=0.20.0",
-    "datasets>=2.14.0",
-    "numpy>=1.24.0",
-    "scipy>=1.10.0",
-    "tensorboard>=2.14.0",
-    "wandb>=0.15.0",
+    "datasets>=2.0.0",
+    "numpy>=1.21.0",
+    "scipy>=1.7.0",
+    "tensorboard>=2.8.0",
+    "wandb>=0.13.0",
 ]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["ai_diplomacy*", "diplomacy*"]
+exclude = ["tests*", "docs*"]
+
+[tool.setuptools.package-data]
+"*" = ["*.txt", "*.md", "*.json", "*.yaml", "*.yml"]
