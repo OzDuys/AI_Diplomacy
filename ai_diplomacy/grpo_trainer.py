@@ -117,14 +117,7 @@ class DiplomacyGRPOTrainer:
                 # For single GPU, load everything on GPU 0
                 model_kwargs["device_map"] = {"": 0}
             
-            # Enable memory efficient attention if available
-            try:
-                import flash_attn
-                model_kwargs["attn_implementation"] = "flash_attention_2"
-                logger.info("Using Flash Attention 2 for memory efficiency")
-            except ImportError:
-                logger.info("Flash Attention 2 not available, using default attention")
-                # Don't set attn_implementation to avoid the error
+            # Use default attention (Flash Attention 2 removed for compatibility)
         
         self.model = AutoModelForCausalLM.from_pretrained(config.model_name, **model_kwargs)
         
