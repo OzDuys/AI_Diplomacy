@@ -295,10 +295,9 @@ class DiplomacyMultiTurnEnv:
             
             prompts.append(prompt)
             
-        # Debug: Log prompt info (reduced verbosity)
+        # Debug: Only log basic info, no prompt content
         if prompts:
-            logger.info(f"Generated {len(prompts)} prompts for current decision type: {self.current_decision_type.value}")
-            # Removed prompt content logging as requested - only showing LLM outputs
+            logger.debug(f"Generated {len(prompts)} prompts for decision type: {self.current_decision_type.value}")
         else:
             logger.warning("No prompts generated!")
             
