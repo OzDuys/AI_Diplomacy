@@ -192,8 +192,8 @@ class EnhancedWandBLogger:
                 'timestamp': time.time(),
                 'power': power,
                 'phase': phase,
-                'prompt': prompt,
-                'response': response,
+                'prompt': prompt,  # Full prompt saved
+                'response': response,  # Full response saved
                 'parsed_orders': parsed_orders,
                 'success': success,
                 'episode': episode,
@@ -206,13 +206,42 @@ class EnhancedWandBLogger:
             # Store in memory
             self.llm_generations.append(generation_data)
             
-            # Save to JSON file
-            json_file = self.temp_dir / f"llm_generation_{len(self.llm_generations)}.json"
-            with open(json_file, 'w') as f:
-                json.dump(generation_data, f, indent=2)
+            # Save FULL JSON file with complete content (NO TRUNCATION)
+            generation_id = len(self.llm_generations)
+            json_file = self.temp_dir / f"llm_generation_FULL_{generation_id:04d}_{power}_{phase}.json"
+            with open(json_file, 'w', encoding='utf-8') as f:
+                json.dump(generation_data, f, indent=2, ensure_ascii=False)
             
-            # Log the JSON file to W&B
-            wandb.save(str(json_file))
+            # Also save a preview version for quick viewing (truncated to 1000 chars)
+            preview_data = generation_data.copy()
+            preview_data['prompt'] = prompt[:1000] + "...[TRUNCATED - see FULL file]" if len(prompt) > 1000 else prompt
+            preview_data['response'] = response[:1000] + "...[TRUNCATED - see FULL file]" if len(response) > 1000 else response
+            preview_data['_note'] = f"PREVIEW ONLY! For complete content, see: llm_generation_FULL_{generation_id:04d}_{power}_{phase}.json"
+            
+            preview_file = self.temp_dir / f"llm_generation_PREVIEW_{generation_id:04d}_{power}_{phase}.json"
+            with open(preview_file, 'w', encoding='utf-8') as f:
+                json.dump(preview_data, f, indent=2, ensure_ascii=False)
+            
+            # Upload both files to W&B with clear naming
+            wandb.save(str(json_file), base_path=self.temp_dir, policy="now")
+            wandb.save(str(preview_file), base_path=self.temp_dir, policy="now")
+            
+            # Also log the full content as a W&B artifact to ensure it's accessible
+            artifact = wandb.Artifact(
+                name=f"llm_generation_{generation_id:04d}_{power}_{phase}",
+                type="llm_generation",
+                description=f"Full LLM generation for {power} in {phase}"
+            )
+            artifact.add_file(str(json_file))
+            wandb.log_artifact(artifact)
+            
+            # Log file information
+            full_size = json_file.stat().st_size
+            preview_size = preview_file.stat().st_size
+            logger.info(f"✅ LLM generation saved for {power}:")
+            logger.info(f"   📄 FULL file: {json_file.name} ({full_size:,} bytes)")
+            logger.info(f"   👁️  PREVIEW file: {preview_file.name} ({preview_size:,} bytes)")
+            logger.info(f"   🔗 W&B Artifact: llm_generation_{generation_id:04d}_{power}_{phase}")
             
             # Log summary metrics
             wandb.log({
@@ -437,6 +466,49 @@ class EnhancedWandBLogger:
             'avg_active_powers': sum(m['game/active_powers'] for m in self.game_metrics) / len(self.game_metrics),
             'final_year': max(m['game/year'] for m in self.game_metrics),
         }
+    
+    def finalize_training_logs(self) -> None:
+        """Create final comprehensive artifacts and summaries."""
+        if not self.enabled:
+            return
+        
+        try:
+            # Create a comprehensive LLM generations archive
+            all_generations_file = self.temp_dir / "ALL_LLM_GENERATIONS_COMPLETE.json"
+            with open(all_generations_file, 'w', encoding='utf-8') as f:
+                json.dump({
+                    'total_generations': len(self.llm_generations),
+                    'generation_summary': self._create_llm_summary(),
+                    'all_generations': self.llm_generations  # Full content, no truncation
+                }, f, indent=2, ensure_ascii=False)
+            
+            # Create final artifact
+            final_artifact = wandb.Artifact(
+                name="complete_training_logs",
+                type="training_archive",
+                description="Complete archive of all LLM generations and training data"
+            )
+            final_artifact.add_file(str(all_generations_file))
+            
+            # Add supply center history
+            if self.supply_center_history:
+                sc_file = self.temp_dir / "supply_center_complete_history.json"
+                with open(sc_file, 'w', encoding='utf-8') as f:
+                    json.dump(self.supply_center_history, f, indent=2)
+                final_artifact.add_file(str(sc_file))
+            
+            wandb.log_artifact(final_artifact)
+            
+            # Log final summary
+            total_size = sum(f.stat().st_size for f in self.temp_dir.iterdir() if f.is_file())
+            logger.info(f"🎯 Training logs finalized:")
+            logger.info(f"   📊 Total LLM generations: {len(self.llm_generations)}")
+            logger.info(f"   💾 Total data size: {total_size:,} bytes")
+            logger.info(f"   🔗 Final artifact: complete_training_logs")
+            logger.info(f"   📂 All files saved to W&B with NO truncation")
+            
+        except Exception as e:
+            logger.warning(f"Failed to finalize training logs: {e}")
     
     def cleanup(self) -> None:
         """Clean up temporary files."""

@@ -767,6 +767,11 @@ class DiplomacyGRPOTrainer:
                 self._log_training_progress()
         
         logger.info("Training completed!")
+        
+        # Finalize enhanced logging with comprehensive artifacts
+        if self.use_wandb:
+            self.enhanced_logger.finalize_training_logs()
+        
         self.save_final_results()
         
         # Save comprehensive final logs
