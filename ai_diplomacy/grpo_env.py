@@ -20,6 +20,7 @@ from .game_history import GameHistory
 from .prompt_constructor import construct_order_generation_prompt, build_context_prompt
 from .grpo_rewards import AllianceTracker, calculate_step_rewards, calculate_final_rewards
 from .initialization import initialize_agent_state_ext
+from .enhanced_wandb_logger import get_enhanced_logger
 
 logger = logging.getLogger(__name__)
 
@@ -404,10 +405,32 @@ class DiplomacyMultiTurnEnv:
             else:
                 logger.warning(f"No orders parsed for {power} - will skip this power's turn")
         
+        # Store supply centers before processing for comparison
+        old_centers = {}
+        for power in ALL_POWERS:
+            if power in self.game.powers:
+                old_centers[power] = list(self.game.get_power(power).centers)
+        
         # Process game phase
         try:
             self.game.process()
             logger.info(f"Game phase {self.current_phase} processed successfully")
+            
+            # Log supply center changes to enhanced logger
+            try:
+                enhanced_logger = get_enhanced_logger()
+                for power in ALL_POWERS:
+                    if power in self.game.powers:
+                        new_centers = list(self.game.get_power(power).centers)
+                        enhanced_logger.log_supply_center_change(
+                            phase=self.current_phase,
+                            power=power,
+                            new_centers=new_centers,
+                            old_centers=old_centers.get(power, [])
+                        )
+            except Exception as e:
+                logger.warning(f"Failed to log supply center changes: {e}")
+                
         except Exception as e:
             logger.error(f"Failed to process game phase {self.current_phase}: {e}")
             # Continue with rewards calculation even if processing failed
@@ -420,6 +443,17 @@ class DiplomacyMultiTurnEnv:
             alliance_tracker=self.alliance_tracker,
             phase=self.current_phase
         )
+        
+        # Log game metrics to enhanced logger
+        try:
+            enhanced_logger = get_enhanced_logger()
+            enhanced_logger.log_game_metrics(
+                phase=self.current_phase,
+                game_state=self.game.get_state(),
+                step=self.step_counter
+            )
+        except Exception as e:
+            logger.warning(f"Failed to log game metrics: {e}")
         
         # Store episode data
         prompts = self.get_batch_prompts()  # Get the prompts that were used
@@ -629,7 +663,7 @@ class DiplomacyMultiTurnEnv:
         logger.info(f"===== FULL {context} FOR {power} =====")
         
         # Break the response into chunks of 1000 characters for better logging
-        chunk_size = 1000
+        chunk_size = 5000
         num_chunks = (len(response) + chunk_size - 1) // chunk_size
         
         # Only warn about chunking for large responses

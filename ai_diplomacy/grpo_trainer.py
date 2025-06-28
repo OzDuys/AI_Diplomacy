@@ -43,6 +43,7 @@ except ImportError:
 from .grpo_env import DiplomacyMultiTurnEnv, DecisionType
 from .grpo_rewards import analyze_alliance_patterns
 from .wandb_llm_logger import log_grpo_interaction, get_llm_logger
+from .enhanced_wandb_logger import get_enhanced_logger, initialize_enhanced_logging
 
 logger = logging.getLogger(__name__)
 
@@ -181,6 +182,13 @@ class DiplomacyGRPOTrainer:
         # Initialize W&B if requested
         self.use_wandb = config.use_wandb and WANDB_AVAILABLE
         
+        # Initialize enhanced W&B logger for comprehensive metrics
+        self.enhanced_logger = initialize_enhanced_logging(
+            project_name=config.wandb_project + "-enhanced",
+            entity=config.wandb_entity,
+            enabled=self.use_wandb
+        )
+        
         # Initialize LLM logger for detailed interaction tracking
         self.llm_logger = get_llm_logger()
         
@@ -213,6 +221,9 @@ class DiplomacyGRPOTrainer:
                     name=f"grpo-{config.model_name.replace('/', '-')}-{config.num_episodes}ep",
                     tags=["grpo", "diplomacy", "multi-agent", "numeric-optimized"]
                 )
+                
+                # Initialize enhanced logger session with same config
+                self.enhanced_logger.initialize_wandb_session(wandb_config)
                 
                 # Define metric summaries to help W&B understand data types
                 wandb.define_metric("step")
@@ -397,6 +408,21 @@ class DiplomacyGRPOTrainer:
                 has_army = 'a ' in response.lower() or 'army' in response.lower()
                 has_fleet = 'f ' in response.lower() or 'fleet' in response.lower()
                 logger.info(f"Contains 'orders': {has_orders}, Army refs: {has_army}, Fleet refs: {has_fleet}")
+                
+                # Log to enhanced logger with full content
+                if self.use_wandb and episode is not None and step is not None:
+                    env_id = env_ids[i] if env_ids and i < len(env_ids) else 0
+                    prompt = prompts[i] if i < len(prompts) else ""
+                    self.enhanced_logger.log_llm_generation(
+                        power=power_name,
+                        phase=f"episode_{episode}_step_{step}",
+                        prompt=prompt,
+                        response=response,
+                        parsed_orders=None,  # Will be determined later in parsing
+                        success=bool(response),
+                        episode=episode,
+                        step=step
+                    )
             else:
                 logger.warning(f"EMPTY RESPONSE from {power_name}!")
         logger.info("=== END BATCH GENERATION LOG ===")
@@ -704,6 +730,10 @@ class DiplomacyGRPOTrainer:
         for episode in range(self.config.num_episodes):
             self.episode_count = episode
             
+            # Log system metrics at episode start
+            if self.use_wandb:
+                self.enhanced_logger.log_system_metrics(episode)
+            
             # Run episode
             episode_result = self.run_episode()
             
@@ -716,6 +746,18 @@ class DiplomacyGRPOTrainer:
             self.training_stats['game_lengths'].append(episode_result['stats']['game_length_phases'])
             self.training_stats['victory_distribution'].append(episode_result['stats']['winner'])
             
+            # Log training metrics to enhanced logger
+            if self.use_wandb:
+                training_metrics = {
+                    'episode_reward_mean': sum(episode_result['stats']['final_rewards']) / 7,
+                    'episode_reward_max': max(episode_result['stats']['final_rewards']),
+                    'episode_reward_min': min(episode_result['stats']['final_rewards']),
+                    'game_length_phases': episode_result['stats']['game_length_phases'],
+                    'alliances_formed': len(episode_result['alliance_analysis'].get('alliances_formed', [])),
+                    'winner': episode_result['stats']['winner']
+                }
+                self.enhanced_logger.log_training_metrics(episode, training_metrics)
+            
             # Save checkpoint
             if (episode + 1) % self.config.save_every == 0:
                 self.save_checkpoint(episode + 1)
@@ -727,10 +769,15 @@ class DiplomacyGRPOTrainer:
         logger.info("Training completed!")
         self.save_final_results()
         
+        # Save comprehensive final logs
+        if self.use_wandb:
+            self.enhanced_logger.save_final_logs()
+        
         # Log final training summary to W&B
         if self.use_wandb:
             self._log_final_summary()
             wandb.finish()
+            self.enhanced_logger.cleanup()
     
     def save_checkpoint(self, episode: int):
         """Save model checkpoint and training stats"""
