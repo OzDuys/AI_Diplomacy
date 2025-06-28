@@ -305,8 +305,8 @@ class BaseModelClient:
             logger.debug(
                 f"[{self.model_name}] No explicit markers found for {power_name}. Looking for bare JSON."
             )
-            # Look for a JSON object that contains "orders" key
-            bare_json_pattern = r'(\{[^{}]*"orders"\s*:\s*\[[^\]]*\][^{}]*\})'
+            # Look for a JSON object that contains "orders" key - find the FIRST occurrence only
+            bare_json_pattern = r'(\{[^{}]*?"orders"\s*:\s*\[[^\]]*?\][^{}]*?\})'
             matches = re.search(bare_json_pattern, raw_response, re.DOTALL)
             if matches:
                 logger.debug(
@@ -344,8 +344,11 @@ class BaseModelClient:
             
             # Try to fix common JSON issues
             try:
+                # Fix double braces (common LLM mistake)
+                fixed_json = re.sub(r'\{\{', '{', json_text)
+                fixed_json = re.sub(r'\}\}', '}', fixed_json)
                 # Remove trailing commas
-                fixed_json = re.sub(r',\s*([\}\]])', r'\1', json_text)
+                fixed_json = re.sub(r',\s*([\}\]])', r'\1', fixed_json)
                 # Fix single quotes to double quotes
                 fixed_json = fixed_json.replace("'", '"')
                 # Try parsing again
@@ -429,6 +432,7 @@ class BaseModelClient:
         validated = []
         invalid_moves_found = [] # ADDED: To collect invalid moves
         used_locs = set()
+        seen_orders = set()  # Track exact orders to avoid duplicates
 
         if not isinstance(moves, list):
             logger.debug(f"[{self.model_name}] Moves not a list, fallback.")
@@ -436,23 +440,41 @@ class BaseModelClient:
             return self.fallback_orders(possible_orders), [] 
         
         for move_str in moves:
+            # Skip if we've already seen this exact order
+            if move_str in seen_orders:
+                logger.debug(f"[{self.model_name}] Skipping duplicate order: {move_str}")
+                continue
+            seen_orders.add(move_str)
+            
+            # Extract unit location to check for duplicate unit orders
+            parts = move_str.split()
+            if len(parts) >= 2:
+                unit_loc = f"{parts[0]} {parts[1]}"  # e.g., "A PAR" or "F SEV"
+                if unit_loc in used_locs:
+                    logger.debug(f"[{self.model_name}] Skipping duplicate unit order for {unit_loc}: {move_str}")
+                    continue
+            
             # Check if it's in possible orders
             if any(move_str in loc_orders for loc_orders in possible_orders.values()):
                 validated.append(move_str)
-                parts = move_str.split()
                 if len(parts) >= 2:
-                    used_locs.add(parts[1][:3])
+                    used_locs.add(f"{parts[0]} {parts[1]}")
             else:
                 logger.debug(f"[{self.model_name}] Invalid move from LLM: {move_str}")
                 invalid_moves_found.append(move_str) # ADDED: Collect invalid move
 
         # Fill missing with hold
         for loc, orders_list in possible_orders.items():
-            if loc not in used_locs and orders_list:
+            # Check if this location already has an order by looking for unit type + location in used_locs
+            location_has_order = any(unit_loc.endswith(f" {loc}") for unit_loc in used_locs)
+            if not location_has_order and orders_list:
                 hold_candidates = [o for o in orders_list if o.endswith("H")]
-                validated.append(
-                    hold_candidates[0] if hold_candidates else orders_list[0]
-                )
+                fallback_order = hold_candidates[0] if hold_candidates else orders_list[0]
+                validated.append(fallback_order)
+                # Add this unit to used_locs to track it
+                parts = fallback_order.split()
+                if len(parts) >= 2:
+                    used_locs.add(f"{parts[0]} {parts[1]}")
 
         if not validated and not invalid_moves_found: # Only if LLM provided no valid moves and no invalid moves (e.g. empty list from LLM)
             logger.warning(f"[{self.model_name}] No valid LLM moves provided and no invalid ones to report. Using fallback.")

@@ -509,6 +509,7 @@ class DiplomacyMultiTurnEnv:
     def _parse_orders_from_response(self, response: str, power: str = "Unknown") -> List[str]:
         """Extract valid orders from LLM response (handles both JSON and plain text)"""
         orders = []
+        seen_units = set()  # Track units to avoid duplicate orders
         
         # Always log the full LLM output for debugging purposes
         logger.info(f"=== FULL LLM OUTPUT FROM {power} ===")
@@ -528,9 +529,8 @@ class DiplomacyMultiTurnEnv:
             
             # Approach 1: Find complete JSON objects with "orders" key
             json_patterns = [
-                r'\{[^{}]*"orders"[^{}]*\}',  # Simple JSON
-                r'\{(?:[^{}]*\{[^{}]*\})*[^{}]*"orders"[^{}]*\}',  # Nested JSON
-                r'"orders"\s*:\s*\[[^\]]*\]',  # Just the orders array
+                r'\{[^{}]*?"orders"\s*:\s*\[[^\]]*?\][^{}]*?\}',  # Simple JSON with orders
+                r'"orders"\s*:\s*\[[^\]]*?\]',  # Just the orders array
             ]
             
             for pattern in json_patterns:
@@ -541,7 +541,12 @@ class DiplomacyMultiTurnEnv:
                         # If it's just the orders array, wrap it in an object
                         if json_str.startswith('"orders"'):
                             json_str = '{' + json_str + '}'
-                            
+                        
+                        # Fix common JSON issues before parsing
+                        json_str = json_str.strip()
+                        # Remove trailing commas
+                        json_str = re.sub(r',\s*(\]|\})', r'\1', json_str)
+                        
                         parsed = json.loads(json_str)
                         if "orders" in parsed and isinstance(parsed["orders"], list):
                             for order in parsed["orders"]:
@@ -549,8 +554,17 @@ class DiplomacyMultiTurnEnv:
                                     # Clean up the order
                                     cleaned_order = ' '.join(order.strip().split())
                                     if cleaned_order.startswith('A ') or cleaned_order.startswith('F '):
-                                        orders.append(cleaned_order)
-                            if orders:  # If we found orders, stop looking
+                                        # Extract unit identifier (first 2 parts: "A PAR", "F SEV")
+                                        parts = cleaned_order.split()
+                                        if len(parts) >= 2:
+                                            unit_id = f"{parts[0]} {parts[1]}"
+                                            if unit_id not in seen_units:
+                                                orders.append(cleaned_order)
+                                                seen_units.add(unit_id)
+                                                logger.debug(f"Added order for {unit_id}: {cleaned_order}")
+                                            else:
+                                                logger.warning(f"Duplicate order for {unit_id} ignored: {cleaned_order}")
+                            if orders:  # If we found orders, stop looking for more JSON blocks
                                 break
                     except json.JSONDecodeError as e:
                         logger.debug(f"Failed to parse JSON '{json_str[:50]}...': {e}")
@@ -563,21 +577,33 @@ class DiplomacyMultiTurnEnv:
         
         # If JSON parsing didn't work, try plain text parsing
         if not orders:
+            seen_units.clear()  # Reset for plain text parsing
             for line in response.split('\n'):
                 line = line.strip()
                 # Look for lines that start with unit notation (A or F followed by space)
                 if line and (line.startswith('A ') or line.startswith('F ')):
                     # Clean up the order - remove extra whitespace
                     cleaned_order = ' '.join(line.split())
-                    orders.append(cleaned_order)
+                    # Extract unit identifier to avoid duplicates
+                    parts = cleaned_order.split()
+                    if len(parts) >= 2:
+                        unit_id = f"{parts[0]} {parts[1]}"
+                        if unit_id not in seen_units:
+                            orders.append(cleaned_order)
+                            seen_units.add(unit_id)
+                            logger.debug(f"Added order from plain text for {unit_id}: {cleaned_order}")
+                        else:
+                            logger.warning(f"Duplicate plain text order for {unit_id} ignored: {cleaned_order}")
         
         # If still no orders found, log the full response using our utility method
         if not orders:
             logger.warning(f"No valid orders found in response from {power} - logging full response:")
             self._log_full_response(power, response, "FAILED ORDER PARSING")
+        else:
+            logger.info(f"Successfully parsed {len(orders)} unique orders from {power}: {orders}")
                 
         # Log parsed orders for debugging
-        logger.debug(f"Parsed orders from {power}: {orders}")
+        logger.debug(f"Final parsed orders from {power}: {orders}")
         return orders
     
     def _get_default_hold_orders(self, power: str) -> List[str]:

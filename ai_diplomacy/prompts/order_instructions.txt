@@ -2,9 +2,12 @@ PRIMARY OBJECTIVE
 Control 18 supply centers. Nothing else will do.
 
 CRITICAL RULES
-1. Only use orders from the provided possible_orders list
-2. Support orders must match actual moves (e.g., 'A PAR S F PIC - ENG' needs 'F PIC - ENG')
-3. Build orders (build phase only):
+1. **UNIT OWNERSHIP**: You can ONLY give orders to YOUR OWN units listed in the game state
+2. **JSON FORMAT**: Use single braces { } in JSON, NOT double braces {{ }}
+3. **ONE ORDER PER UNIT**: Each unit gets exactly ONE order - no duplicates
+4. Only use orders from the provided possible_orders list
+5. Support orders must match actual moves (e.g., 'A PAR S F PIC - ENG' needs 'F PIC - ENG')
+6. Build orders (build phase only):
    - Format: '[UnitType] [Location3LetterCode] B'
    - UnitType: 'A' (Army) or 'F' (Fleet)
    - Example: 'A PAR B', 'F LON B'
@@ -55,9 +58,9 @@ ORDER SUBMISSION PROCESS
 3. FORMAT
    Return orders in this exact format:
    PARSABLE OUTPUT:
-   {{
+   {
      "orders": ["order1", "order2", ...]
-   }}
+   }
 
 
 4. Dual-coast provinces (STP, SPA, BUL):
@@ -73,13 +76,13 @@ Reasoning:
 - Mid-Atlantic move enables future convoys
 
 PARSABLE OUTPUT:
-{{
+{
   "orders": [
     "A PAR H",
     "A MAR - BUR",
     "F BRE - MAO"
   ]
-}}
+}
 
 Example 2: As Germany, Spring 1901, aiming for a swift expansion into DEN and HOL, while also securing home centers.
 
@@ -89,16 +92,16 @@ Reasoning:
 - Kiel (KIE) fleet is best positioned for DEN, while an army from Ruhr (RUH) can take HOL.
 
 PARSABLE OUTPUT:
-{{
+{
   "orders": [
     "A BER H",
     "A MUN H",
     "F KIE - DEN",
     "A RUH - HOL",
-    "A SIL - WAR", // Opportunistic move towards Warsaw if Russia is weak or focused elsewhere
-    "F HEL H"      // Hold Heligoland Bight for naval defense
+    "A SIL - WAR",
+    "F HEL H"
   ]
-}}
+}
 
 Example 3: As Italy, Autumn 1902, after securing Tunis and trying to break into Austria, while also defending against a potential French naval attack. My units are A VEN, A ROM, F NAP, F ION, A APU. Austria has F TRI, A VIE, A BUD. France has F WES, F MAR.
 
@@ -109,7 +112,7 @@ Reasoning:
 - Fleet in Naples (NAP) will move to Tyrrhenian Sea (TYS) to defend against a potential French move from Western Mediterranean (WES) towards Naples or Rome.
 
 PARSABLE OUTPUT:
-{{
+{
   "orders": [
     "A VEN - TRI",
     "A APU S A VEN - TRI",
@@ -117,6 +120,6 @@ PARSABLE OUTPUT:
     "A ROM H",
     "F NAP - TYS"
   ]
-}}
+}
 
 RESPOND WITH YOUR REASONING AND ORDERS (within PARSABLE OUTPUT) BELOW

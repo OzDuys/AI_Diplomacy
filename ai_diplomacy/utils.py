@@ -141,6 +141,9 @@ async def get_valid_orders(
         game_id=game_id,
     )
     
+    # Validate unit ownership first
+    validated_orders = validate_unit_ownership(orders, power_name, game, board_state)
+    
     # Initialize list to track invalid order information
     invalid_info = []
     
@@ -148,12 +151,12 @@ async def get_valid_orders(
     all_valid = True
     valid_orders = []
     
-    if not isinstance(orders, list): # Ensure orders is a list before iterating
-        logger.warning(f"[{power_name}] Orders received from LLM is not a list: {orders}. Using fallback.")
+    if not isinstance(validated_orders, list): # Ensure orders is a list before iterating
+        logger.warning(f"[{power_name}] Orders received from LLM is not a list: {validated_orders}. Using fallback.")
         model_error_stats[client.model_name]["order_decoding_errors"] += 1 # Use client.model_name
         return client.fallback_orders(possible_orders)
 
-    for move in orders:
+    for move in validated_orders:
         # Skip empty orders
         if not move or move.strip() == "":
             continue
@@ -212,6 +215,64 @@ async def get_valid_orders(
         model_error_stats[client.model_name]["order_decoding_errors"] += 1
         fallback = client.fallback_orders(possible_orders)
         return fallback
+
+
+def validate_unit_ownership(orders: List[str], power_name: str, game: Game, board_state: dict) -> List[str]:
+    """
+    Validate that orders only reference units owned by the power.
+    
+    Args:
+        orders: List of order strings from LLM
+        power_name: Name of the power (e.g., "FRANCE")
+        game: Diplomacy game object
+        board_state: Current board state
+        
+    Returns:
+        List of valid orders that only reference owned units
+    """
+    if not isinstance(orders, list):
+        return []
+    
+    # Get units owned by this power
+    owned_units = board_state.get("units", {}).get(power_name, [])
+    owned_locations = set()
+    
+    for unit_str in owned_units:
+        # Parse unit string like "A PAR" or "F BRE"
+        parts = unit_str.split()
+        if len(parts) >= 2:
+            location = parts[1]  # PAR, BRE, etc.
+            owned_locations.add(location)
+    
+    valid_orders = []
+    
+    for order in orders:
+        if not order or not order.strip():
+            continue
+            
+        # Parse order to extract location
+        parts = order.strip().split()
+        if len(parts) >= 2:
+            order_location = parts[1]  # Location from order like "A PAR H"
+            
+            if order_location in owned_locations:
+                valid_orders.append(order)
+            else:
+                logger.warning(
+                    f"[{power_name}] Attempted to order unit at {order_location} "
+                    f"which they don't control. Order ignored: {order}"
+                )
+        else:
+            logger.warning(f"[{power_name}] Malformed order: {order}")
+    
+    if len(valid_orders) < len(orders):
+        ownership_filtered = len(orders) - len(valid_orders)
+        logger.info(
+            f"[{power_name}] Filtered out {ownership_filtered} orders due to unit ownership. "
+            f"Kept {len(valid_orders)} valid orders."
+        )
+    
+    return valid_orders
 
 
 def normalize_and_compare_orders(
