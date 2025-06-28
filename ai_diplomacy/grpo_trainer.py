@@ -386,14 +386,19 @@ class DiplomacyGRPOTrainer:
             logger.info(f"Response {i+1}/7 ({power_name}):")
             logger.info(f"Length: {len(response)} characters")
             if response:
-                # Log first 200 chars and whether response contains key terms
-                logger.info(f"Preview: {response[:200]}{'...' if len(response) > 200 else ''}")
+                # Log the FULL response content
+                logger.info(f"FULL LLM OUTPUT FOR {power_name}:")
+                logger.info("=" * 50)
+                logger.info(response)
+                logger.info("=" * 50)
+                
+                # Also check for key terms
                 has_orders = 'orders' in response.lower()
                 has_army = 'a ' in response.lower() or 'army' in response.lower()
                 has_fleet = 'f ' in response.lower() or 'fleet' in response.lower()
                 logger.info(f"Contains 'orders': {has_orders}, Army refs: {has_army}, Fleet refs: {has_fleet}")
             else:
-                logger.warning(f"Empty response from {power_name}!")
+                logger.warning(f"EMPTY RESPONSE from {power_name}!")
         logger.info("=== END BATCH GENERATION LOG ===")
 
         return responses

@@ -298,12 +298,7 @@ class DiplomacyMultiTurnEnv:
         # Debug: Log prompt info (reduced verbosity)
         if prompts:
             logger.info(f"Generated {len(prompts)} prompts for current decision type: {self.current_decision_type.value}")
-            # Log a sample of the first prompt to verify it's properly constructed
-            if prompts[0]:
-                first_prompt_preview = prompts[0][:500] + "..." if len(prompts[0]) > 500 else prompts[0]
-                logger.info(f"Sample prompt (first 500 chars): {first_prompt_preview}")
-            else:
-                logger.warning("First prompt is empty!")
+            # Removed prompt content logging as requested - only showing LLM outputs
         else:
             logger.warning("No prompts generated!")
             
@@ -482,9 +477,9 @@ class DiplomacyMultiTurnEnv:
         """Extract valid orders from LLM response (handles both JSON and plain text)"""
         orders = []
         
-        # Always log the full response for debugging purposes
-        logger.info(f"Full LLM response from {power}:")
-        self._log_full_response(power, response, "ALL LLM RESPONSES")
+        # Always log the full LLM output for debugging purposes
+        logger.info(f"=== FULL LLM OUTPUT FROM {power} ===")
+        self._log_full_response(power, response, "LLM OUTPUT")
         
         # Use the power-aware logging utility if power is provided
         # Log the raw response for debugging - full response will be logged if no orders are found
